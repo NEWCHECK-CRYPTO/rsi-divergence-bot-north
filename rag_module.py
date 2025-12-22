@@ -1,10 +1,11 @@
 """
-RAG Module using Google Gemini
+RAG Module using Google Gemini (New SDK)
 """
 
 import json
 from typing import Dict, Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from config import GEMINI_API_KEY, RAG_KNOWLEDGE_PATH, GEMINI_MODEL
 
 
@@ -12,15 +13,12 @@ class TradingKnowledgeRAG:
     def __init__(self, knowledge_path: str = RAG_KNOWLEDGE_PATH):
         self.knowledge_path = knowledge_path
         self.knowledge_base = None
-        self.model = None
+        self.client = None
         self._initialize()
     
     def _initialize(self):
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            generation_config={"temperature": 0.3, "top_p": 0.95, "max_output_tokens": 1024}
-        )
+        # Initialize new Gemini client
+        self.client = genai.Client(api_key=GEMINI_API_KEY)
         self.knowledge_base = self._load_knowledge_base()
         self.system_context = self._create_system_context()
     
@@ -64,13 +62,20 @@ class TradingKnowledgeRAG:
         return "\n".join(parts)
     
     def query(self, question: str) -> str:
-        if self.model is None:
+        if self.client is None:
             return "RAG not initialized."
         
         prompt = f"{self.system_context}\n\n=== QUESTION ===\n{question}\n\nAnswer based on the knowledge above. Be specific and practical."
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.3,
+                    max_output_tokens=1024,
+                )
+            )
             return response.text
         except Exception as e:
             return f"Error: {str(e)}"
@@ -91,9 +96,9 @@ class SimpleKnowledgeBase:
         div_type = divergence_type.lower().replace(" ", "_")
         if "rsi_divergence" in self.knowledge:
             for section in ["bullish_divergence", "bearish_divergence"]:
-                types = self.knowledge["rsi_divergence"].get(section, {}).get("types", {})
-                if div_type in types:
-                    return types[div_type]
+                types_dict = self.knowledge["rsi_divergence"].get(section, {}).get("types", {})
+                if div_type in types_dict:
+                    return types_dict[div_type]
         return None
     
     def get_confirmation_tf(self, signal_tf: str) -> Optional[str]:

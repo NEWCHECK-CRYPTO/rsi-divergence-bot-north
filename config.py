@@ -27,4 +27,6 @@ MIN_CONFIDENCE_THRESHOLD = 0.60
 SCAN_INTERVAL = 300
 ALERT_COOLDOWN = 1800
 RAG_KNOWLEDGE_PATH = "rsi_divergence_ms_rag.json"
-GEMINI_MODEL = "gemini-1.5-flash"
+
+# Updated model name for new SDK
+GEMINI_MODEL = "gemini-2.0-flash"
