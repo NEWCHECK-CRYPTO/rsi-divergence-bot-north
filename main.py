@@ -157,10 +157,14 @@ def run_web_server():
 # =============================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbols = scanner.get_symbols_to_scan()
+    num_symbols = len(symbols)
+    
     await update.message.reply_text(
         f"🤖 *RSI Divergence Alert Bot*\n\n"
-        f"📊 Monitoring *Top {TOP_COINS_COUNT}* Binance coins by volume\n"
-        f"🇱🇰 All times in Sri Lanka timezone\n\n"
+        f"📊 Monitoring *{num_symbols}* Binance coins (Top by volume)\n"
+        f"⏰ Timeframes: 15m, 1h, 4h, 1d, 1w, 1M\n"
+        f"🇱🇰 Sri Lanka timezone (IST)\n\n"
         f"*Commands:*\n"
         f"/subscribe - Get live alerts\n"
         f"/unsubscribe - Stop alerts\n"
@@ -184,7 +188,8 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ *Subscribed to Live Alerts!*\n\n"
         f"📊 Monitoring: *{len(symbols)}* coins\n"
-        f"⏰ Scan interval: *{SCAN_INTERVAL // 60}* minutes\n"
+        f"⏰ Timeframes: 15m, 1h, 4h, 1d, 1w, 1M\n"
+        f"🔄 Scan interval: *{SCAN_INTERVAL // 60}* minutes\n"
         f"🇱🇰 Time: {format_sl_time()}\n\n"
         f"You'll receive alerts when divergences are confirmed!",
         parse_mode='Markdown'
@@ -201,6 +206,22 @@ async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🇱🇰 *Sri Lanka Time*\n\n"
         f"📅 {format_sl_time()}\n"
         f"🌐 Timezone: Asia/Colombo (UTC+5:30)",
+        parse_mode='Markdown'
+    )
+
+
+async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbols = scanner.get_symbols_to_scan()
+    
+    await update.message.reply_text(
+        f"📊 *Bot Status*\n\n"
+        f"🪙 Coins: *{len(symbols)}*\n"
+        f"⏰ Timeframes: *{', '.join(SCAN_TIMEFRAMES)}*\n"
+        f"🔄 Scan interval: *{SCAN_INTERVAL // 60} min*\n"
+        f"👥 Subscribers: *{len(subscribers)}*\n"
+        f"🇱🇰 Time: {format_sl_time()}\n\n"
+        f"*Top 10 by Volume:*\n" +
+        "\n".join([f"#{i+1} {s}" for i, s in enumerate(symbols[:10])]),
         parse_mode='Markdown'
     )
 
@@ -362,6 +383,7 @@ def main():
     app.add_handler(CommandHandler("top", show_top_coins))
     app.add_handler(CommandHandler("rules", show_rules))
     app.add_handler(CommandHandler("time", show_time))
+    app.add_handler(CommandHandler("status", show_status))
     app.add_handler(CommandHandler("ask", ask_rag))
     app.add_handler(CallbackQueryHandler(rules_callback, pattern="^rules_"))
     

@@ -206,12 +206,21 @@ class DivergenceScanner:
             
         except Exception as e:
             print(f"[{format_sl_time()}] Error fetching top coins: {e}")
-            # Return cached or default
+            # Return cached or default top 50
             if self.symbols_cache:
                 return self.symbols_cache
+            # Default top 50 coins by typical volume
             return [
-                "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT",
-                "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT"
+                "BTC/USDT", "ETH/USDT", "XRP/USDT", "SOL/USDT", "BNB/USDT",
+                "DOGE/USDT", "ADA/USDT", "TRX/USDT", "AVAX/USDT", "LINK/USDT",
+                "XLM/USDT", "SHIB/USDT", "DOT/USDT", "HBAR/USDT", "SUI/USDT",
+                "BCH/USDT", "LTC/USDT", "UNI/USDT", "PEPE/USDT", "NEAR/USDT",
+                "APT/USDT", "ICP/USDT", "ETC/USDT", "AAVE/USDT", "POL/USDT",
+                "FIL/USDT", "ARB/USDT", "OP/USDT", "ATOM/USDT", "INJ/USDT",
+                "RENDER/USDT", "FET/USDT", "IMX/USDT", "WIF/USDT", "BONK/USDT",
+                "STX/USDT", "TAO/USDT", "SEI/USDT", "SAND/USDT", "MANA/USDT",
+                "GALA/USDT", "AXS/USDT", "FTM/USDT", "ALGO/USDT", "THETA/USDT",
+                "XTZ/USDT", "VET/USDT", "EGLD/USDT", "FLOW/USDT", "NEO/USDT"
             ]
     
     def get_symbols_to_scan(self) -> List[str]:

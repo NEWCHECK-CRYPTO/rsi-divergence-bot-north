@@ -28,11 +28,17 @@ EXCLUDED_SYMBOLS = [
 # Exclude leveraged tokens (contain UP, DOWN, BULL, BEAR)
 EXCLUDE_LEVERAGED = True
 
-SCAN_TIMEFRAMES = ["1d", "4h", "1h"]
+# All timeframes to scan for divergences
+SCAN_TIMEFRAMES = ["15m", "1h", "4h", "1d", "1w", "1M"]
 
+# Timeframe mapping: Signal TF -> Confirmation TF (lower timeframe)
 TIMEFRAME_CONFIRMATION_MAP = {
-    "1M": "1d", "1w": "4h", "1d": "1h",
-    "4h": "15m", "1h": "5m", "15m": "1m",
+    "1M": "1d",    # Monthly signal -> Daily confirmation
+    "1w": "4h",    # Weekly signal -> 4H confirmation
+    "1d": "1h",    # Daily signal -> 1H confirmation
+    "4h": "15m",   # 4H signal -> 15M confirmation
+    "1h": "5m",    # 1H signal -> 5M confirmation
+    "15m": "1m",   # 15M signal -> 1M confirmation
 }
 
 RSI_PERIOD = 14
