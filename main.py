@@ -1,6 +1,9 @@
 """
-RSI Divergence Alert Bot - Top 100 Binance Coins
-All times in Sri Lanka timezone (Asia/Colombo)
+RSI Divergence Alert Bot - V3
+- 3 Signal Levels: Strong, Medium, Early
+- TradingView RSI Calculation
+- Proper Candle Close Logic
+- Sri Lanka Time
 """
 
 import asyncio
@@ -15,7 +18,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 from config import TELEGRAM_TOKEN, SCAN_TIMEFRAMES, SCAN_INTERVAL, TOP_COINS_COUNT, TIMEZONE
-from divergence_scanner import DivergenceScanner, AlertFormatter, get_sl_time, format_sl_time
+from divergence_scanner import (
+    DivergenceScanner, AlertFormatter, SignalStrength,
+    get_sl_time, format_sl_time
+)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -25,124 +31,30 @@ logger = logging.getLogger(__name__)
 
 scanner = DivergenceScanner()
 rag = None
-subscribers = set()
+subscribers = {}
 
 SL_TZ = pytz.timezone(TIMEZONE)
 
-
-# =============================================================================
-# WEB SERVER
-# =============================================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
-        
         symbols = scanner.get_symbols_to_scan()
         top_5 = symbols[:5] if symbols else []
-        
-        html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>RSI Divergence Bot</title>
-    <meta http-equiv="refresh" content="30">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #fff;
-            padding: 40px 20px;
-        }}
-        .container {{ max-width: 900px; margin: 0 auto; }}
-        h1 {{ font-size: 2.5rem; margin-bottom: 10px; }}
-        .card {{
-            background: rgba(255,255,255,0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 20px;
-        }}
-        .status {{ 
-            display: inline-block;
-            padding: 8px 16px;
-            background: #00c853;
-            border-radius: 20px;
-            font-weight: 600;
-        }}
-        .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 15px; margin-top: 20px; }}
-        .stat {{ background: rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; text-align: center; }}
-        .stat-value {{ font-size: 2rem; font-weight: 700; }}
-        .stat-label {{ opacity: 0.8; font-size: 0.85rem; }}
-        .top-coins {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }}
-        .coin {{ background: rgba(255,255,255,0.2); padding: 8px 16px; border-radius: 20px; font-weight: 500; }}
-        code {{ background: rgba(0,0,0,0.3); padding: 4px 10px; border-radius: 6px; }}
-        ul {{ list-style: none; }}
-        li {{ padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }}
-        .time {{ font-size: 1.2rem; margin-top: 10px; opacity: 0.9; }}
-        .flag {{ font-size: 1.5rem; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🤖 RSI Divergence Alert Bot</h1>
-        <p style="opacity:0.8; margin-bottom:30px;">Top {TOP_COINS_COUNT} Binance Coins by Volume | EmperorBTC Methodology</p>
-        
-        <div class="card">
-            <span class="status">✅ Running</span>
-            <p class="time"><span class="flag">🇱🇰</span> Sri Lanka Time: <strong>{format_sl_time()}</strong></p>
-            
-            <div class="stats">
-                <div class="stat">
-                    <div class="stat-value">{len(symbols)}</div>
-                    <div class="stat-label">Coins</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-value">{len(subscribers)}</div>
-                    <div class="stat-label">Subscribers</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-value">{SCAN_INTERVAL // 60}m</div>
-                    <div class="stat-label">Scan Interval</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-value">{len(SCAN_TIMEFRAMES)}</div>
-                    <div class="stat-label">Timeframes</div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h3 style="margin-bottom:15px;">🔥 Top 5 by Volume</h3>
-            <div class="top-coins">
-                {"".join([f'<span class="coin">#{i+1} {s}</span>' for i, s in enumerate(top_5)])}
-            </div>
-        </div>
-        
-        <div class="card">
-            <h3 style="margin-bottom:15px;">💬 Commands</h3>
-            <ul>
-                <li><code>/start</code> - Welcome</li>
-                <li><code>/subscribe</code> - Get alerts</li>
-                <li><code>/unsubscribe</code> - Stop alerts</li>
-                <li><code>/scan</code> - Manual scan</li>
-                <li><code>/top</code> - View top 20 coins</li>
-                <li><code>/rules</code> - Trading rules</li>
-                <li><code>/time</code> - Current Sri Lanka time</li>
-            </ul>
-        </div>
-    </div>
-</body>
-</html>
-"""
+        html = f"""<!DOCTYPE html><html><head><title>RSI Bot V3</title><meta http-equiv="refresh" content="30">
+<style>body{{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:40px}}
+.card{{background:rgba(255,255,255,0.05);border-radius:16px;padding:24px;margin:20px 0}}
+.status{{background:#00c853;padding:8px 16px;border-radius:20px;color:#000}}</style></head>
+<body><h1>🤖 RSI Divergence Bot V3</h1>
+<div class="card"><span class="status">✅ Running</span><p>🇱🇰 {format_sl_time()}</p>
+<p>📊 {len(symbols)} coins | 👥 {len(subscribers)} subscribers | ⏰ {SCAN_INTERVAL//60}m interval</p></div>
+<div class="card"><h3>Signal Levels</h3><p>🟢 STRONG | 🟡 MEDIUM | 🔴 EARLY</p></div>
+<div class="card"><h3>Top 5</h3><p>{', '.join(top_5)}</p></div>
+<div class="card"><h3>Timeframes</h3><p>{', '.join(SCAN_TIMEFRAMES)}</p></div></body></html>"""
         self.wfile.write(html.encode())
-    
-    def log_message(self, format, *args):
-        pass
+    def log_message(self, format, *args): pass
 
 
 def run_web_server():
@@ -152,247 +64,169 @@ def run_web_server():
     server.serve_forever()
 
 
-# =============================================================================
-# TELEGRAM HANDLERS
-# =============================================================================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
-    num_symbols = len(symbols)
-    
     await update.message.reply_text(
-        f"🤖 *RSI Divergence Alert Bot*\n\n"
-        f"📊 Monitoring *{num_symbols}* Binance coins (Top by volume)\n"
-        f"⏰ Timeframes: 15m, 1h, 4h, 1d, 1w, 1M\n"
-        f"🇱🇰 Sri Lanka timezone (IST)\n\n"
+        f"🤖 *RSI Divergence Bot V3*\n\n"
+        f"📊 *{len(symbols)}* coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"📈 TradingView RSI | 🇱🇰 Sri Lanka time\n\n"
+        f"*Signal Levels:*\n"
+        f"🟢 STRONG - Div + MS + Momentum\n"
+        f"🟡 MEDIUM - Div + Momentum\n"
+        f"🔴 EARLY - Divergence forming\n\n"
         f"*Commands:*\n"
-        f"/subscribe - Get live alerts\n"
-        f"/unsubscribe - Stop alerts\n"
-        f"/scan - Manual scan now\n"
-        f"/top - View top 20 coins\n"
-        f"/rules - Trading rules\n"
-        f"/time - Current SL time\n\n"
-        f"⚠️ Not financial advice!",
-        parse_mode='Markdown'
-    )
+        f"/subscribe - All signals\n"
+        f"/subscribe strong - Strong only\n"
+        f"/subscribe medium - Medium+\n"
+        f"/scan - Manual scan\n"
+        f"/status - Bot status\n"
+        f"/top - Top 20 coins\n"
+        f"/rules - Trading rules",
+        parse_mode='Markdown')
 
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    if chat_id in subscribers:
-        await update.message.reply_text("✅ Already subscribed!")
-        return
-    subscribers.add(chat_id)
+    min_strength = SignalStrength.EARLY
+    if context.args:
+        level = context.args[0].lower()
+        if level == "strong": min_strength = SignalStrength.STRONG
+        elif level == "medium": min_strength = SignalStrength.MEDIUM
     
+    subscribers[chat_id] = {"min_strength": min_strength}
+    strength_text = {
+        SignalStrength.STRONG: "🟢 Strong only",
+        SignalStrength.MEDIUM: "🟡 Medium+",
+        SignalStrength.EARLY: "🔴🟡🟢 All signals"
+    }
     symbols = scanner.get_symbols_to_scan()
     await update.message.reply_text(
-        f"✅ *Subscribed to Live Alerts!*\n\n"
-        f"📊 Monitoring: *{len(symbols)}* coins\n"
-        f"⏰ Timeframes: 15m, 1h, 4h, 1d, 1w, 1M\n"
-        f"🔄 Scan interval: *{SCAN_INTERVAL // 60}* minutes\n"
-        f"🇱🇰 Time: {format_sl_time()}\n\n"
-        f"You'll receive alerts when divergences are confirmed!",
-        parse_mode='Markdown'
-    )
+        f"✅ *Subscribed!*\n\n"
+        f"📊 {len(symbols)} coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"🔔 {strength_text[min_strength]}\n"
+        f"🇱🇰 {format_sl_time()}",
+        parse_mode='Markdown')
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    subscribers.discard(update.effective_chat.id)
-    await update.message.reply_text("❌ Unsubscribed from alerts")
-
-
-async def show_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🇱🇰 *Sri Lanka Time*\n\n"
-        f"📅 {format_sl_time()}\n"
-        f"🌐 Timezone: Asia/Colombo (UTC+5:30)",
-        parse_mode='Markdown'
-    )
+    if update.effective_chat.id in subscribers:
+        del subscribers[update.effective_chat.id]
+    await update.message.reply_text("❌ Unsubscribed")
 
 
 async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
-    
     await update.message.reply_text(
-        f"📊 *Bot Status*\n\n"
-        f"🪙 Coins: *{len(symbols)}*\n"
-        f"⏰ Timeframes: *{', '.join(SCAN_TIMEFRAMES)}*\n"
-        f"🔄 Scan interval: *{SCAN_INTERVAL // 60} min*\n"
-        f"👥 Subscribers: *{len(subscribers)}*\n"
-        f"🇱🇰 Time: {format_sl_time()}\n\n"
-        f"*Top 10 by Volume:*\n" +
-        "\n".join([f"#{i+1} {s}" for i, s in enumerate(symbols[:10])]),
-        parse_mode='Markdown'
-    )
+        f"📊 *Status*\n\n"
+        f"🪙 {len(symbols)} coins\n"
+        f"⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"👥 {len(subscribers)} subscribers\n"
+        f"🇱🇰 {format_sl_time()}\n\n"
+        f"*Top 10:*\n" + "\n".join([f"#{i+1} {s}" for i, s in enumerate(symbols[:10])]),
+        parse_mode='Markdown')
 
 
 async def show_top_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Fetching top coins by volume...")
-    
+    await update.message.reply_text("🔄 Fetching...")
     try:
         symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
-        top_20 = symbols[:20]
-        
-        lines = [f"🔥 *Top 20 Coins by 24h Volume*\n"]
-        for i, symbol in enumerate(top_20, 1):
-            medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"#{i}"
-            lines.append(f"{medal} {symbol}")
-        
-        lines.append(f"\n🇱🇰 Updated: {format_sl_time()}")
-        
+        lines = ["🔥 *Top 20 by Volume*\n"]
+        for i, s in enumerate(symbols[:20], 1):
+            medal = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else f"#{i}"
+            lines.append(f"{medal} {s}")
+        lines.append(f"\n🇱🇰 {format_sl_time()}")
         await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
-        
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ {e}")
 
 
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
-    await update.message.reply_text(
-        f"🔍 Scanning {len(symbols)} coins...\n"
-        f"⏳ This takes 2-3 minutes\n"
-        f"🇱🇰 Started: {format_sl_time()}"
-    )
-    
+    await update.message.reply_text(f"🔍 Scanning {len(symbols)} coins...\n⏳ 3-5 minutes\n🇱🇰 {format_sl_time()}")
     try:
         alerts = scanner.scan_all()
-        
         if alerts:
-            await update.message.reply_text(f"✅ Found {len(alerts)} signal(s)!")
+            strong = len([a for a in alerts if a.signal_strength == SignalStrength.STRONG])
+            medium = len([a for a in alerts if a.signal_strength == SignalStrength.MEDIUM])
+            early = len([a for a in alerts if a.signal_strength == SignalStrength.EARLY])
+            await update.message.reply_text(f"✅ *Found {len(alerts)} signals!*\n🟢 {strong} | 🟡 {medium} | 🔴 {early}", parse_mode='Markdown')
             for alert in alerts:
                 await update.message.reply_text(AlertFormatter.format_alert(alert))
+                await asyncio.sleep(0.5)
         else:
-            await update.message.reply_text(
-                f"📭 No confirmed signals right now.\n\n"
-                f"🇱🇰 Completed: {format_sl_time()}"
-            )
+            await update.message.reply_text(f"📭 No signals\n🇱🇰 {format_sl_time()}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await update.message.reply_text(f"❌ {e}")
 
 
 async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("🟢 Bullish", callback_data="rules_bullish"),
-            InlineKeyboardButton("🔴 Bearish", callback_data="rules_bearish"),
-        ],
-        [
-            InlineKeyboardButton("📈 MS", callback_data="rules_ms"),
-            InlineKeyboardButton("✅ Confirm", callback_data="rules_confirm"),
-        ]
-    ]
-    await update.message.reply_text(
-        "📚 *Trading Rules* - Select:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    keyboard = [[InlineKeyboardButton("🟢 Bullish", callback_data="rules_bullish"),
+                 InlineKeyboardButton("🔴 Bearish", callback_data="rules_bearish")],
+                [InlineKeyboardButton("📈 MS", callback_data="rules_ms"),
+                 InlineKeyboardButton("📊 Signals", callback_data="rules_signals")]]
+    await update.message.reply_text("📚 *Trading Rules*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 
 async def rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     rules = {
-        "bullish": "🟢 *BULLISH DIVERGENCE*\n_(Look at LOWS)_\n\n• *Strong:* Price LL + RSI HL → 85%\n• *Medium:* Price DB + RSI HL → 75%\n• *Weak:* Price LL + RSI DB → 60%\n• *Hidden:* Price HL + RSI LL → 70%",
-        "bearish": "🔴 *BEARISH DIVERGENCE*\n_(Look at HIGHS)_\n\n• *Strong:* Price HH + RSI LH → 85%\n• *Medium:* Price DT + RSI LH → 75%\n• *Weak:* Price HH + RSI DT → 60%\n• *Hidden:* Price LH + RSI HH → 70%",
-        "ms": "📈 *MARKET STRUCTURE*\n\n• HH = Higher High\n• HL = Higher Low\n• LL = Lower Low\n• LH = Lower High\n• BOS = Break of Structure\n• CHoCH = Change of Character\n\n_Bullish:_ HH + HL\n_Bearish:_ LL + LH",
-        "confirm": "✅ *CONFIRMATION*\n\n*LONG:*\n1. Bullish div on higher TF\n2. Bullish CHoCH/BOS on lower TF\n3. Entry above CHoCH\n\n*SHORT:* Opposite"
+        "bullish": "🟢 *BULLISH*\n• Strong: Price LL + RSI HL\n• Medium: Price DB + RSI HL\n• Hidden: Price HL + RSI LL\n\n✅ RSI rising\n✅ Price rising",
+        "bearish": "🔴 *BEARISH*\n• Strong: Price HH + RSI LH\n• Medium: Price DT + RSI LH\n• Hidden: Price LH + RSI HH\n\n✅ RSI falling\n✅ Price falling",
+        "ms": "📈 *MARKET STRUCTURE*\n• BOS = Break of Structure\n• CHoCH = Change of Character",
+        "signals": "📊 *SIGNALS*\n🟢 STRONG: Div+MS+Momentum\n🟡 MEDIUM: Div+Momentum\n🔴 EARLY: Div forming"
     }
-    
-    rule_type = query.data.replace("rules_", "")
-    await query.edit_message_text(rules.get(rule_type, "Not found"), parse_mode='Markdown')
-
-
-async def ask_rag(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Usage: /ask <question>")
-        return
-    
-    question = " ".join(context.args)
-    await update.message.reply_text("🤔 Thinking...")
-    
-    try:
-        if rag:
-            answer = rag.query(question)
-            await update.message.reply_text(answer)
-        else:
-            await update.message.reply_text("⚠️ Gemini not configured. Use /rules")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+    await query.edit_message_text(rules.get(query.data.replace("rules_",""), "N/A"), parse_mode='Markdown')
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
-    if not subscribers:
-        logger.info(f"[{format_sl_time()}] No subscribers, skipping scan")
-        return
-    
-    logger.info(f"[{format_sl_time()}] Starting scheduled scan for {len(subscribers)} subscribers")
-    
+    if not subscribers: return
+    logger.info(f"[{format_sl_time()}] Scanning for {len(subscribers)} subscribers")
     try:
         alerts = scanner.scan_all()
-        
-        for alert in alerts:
-            message = AlertFormatter.format_alert(alert)
-            for chat_id in subscribers:
+        if not alerts: return
+        strength_order = {SignalStrength.STRONG: 3, SignalStrength.MEDIUM: 2, SignalStrength.EARLY: 1}
+        for chat_id, prefs in subscribers.items():
+            min_level = strength_order.get(prefs.get("min_strength", SignalStrength.EARLY), 1)
+            user_alerts = [a for a in alerts if strength_order.get(a.signal_strength, 0) >= min_level]
+            for alert in user_alerts:
                 try:
-                    await context.bot.send_message(chat_id=chat_id, text=message)
+                    await context.bot.send_message(chat_id=chat_id, text=AlertFormatter.format_alert(alert))
                 except Exception as e:
                     logger.error(f"Send error: {e}")
-        
-        if alerts:
-            logger.info(f"[{format_sl_time()}] Sent {len(alerts)} alerts")
-            
+        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} alerts")
     except Exception as e:
-        logger.error(f"[{format_sl_time()}] Scan error: {e}")
+        logger.error(f"Scan error: {e}")
 
-
-# =============================================================================
-# MAIN
-# =============================================================================
 
 def main():
     global rag
-    
-    # Start web server
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
+    threading.Thread(target=run_web_server, daemon=True).start()
     logger.info(f"[{format_sl_time()}] Health server started")
     
-    # Initialize RAG
     try:
         from config import GEMINI_API_KEY
         if GEMINI_API_KEY and len(GEMINI_API_KEY) > 10:
             from rag_module import TradingKnowledgeRAG
             rag = TradingKnowledgeRAG()
             logger.info(f"[{format_sl_time()}] Gemini RAG ready")
-    except Exception as e:
-        logger.warning(f"[{format_sl_time()}] RAG init failed: {e}")
+    except: pass
     
-    # Pre-fetch top coins
-    logger.info(f"[{format_sl_time()}] Fetching top {TOP_COINS_COUNT} coins...")
     symbols = scanner.get_symbols_to_scan()
     logger.info(f"[{format_sl_time()}] Loaded {len(symbols)} symbols")
     
-    # Telegram bot
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("scan", manual_scan))
     app.add_handler(CommandHandler("top", show_top_coins))
-    app.add_handler(CommandHandler("rules", show_rules))
-    app.add_handler(CommandHandler("time", show_time))
     app.add_handler(CommandHandler("status", show_status))
-    app.add_handler(CommandHandler("ask", ask_rag))
+    app.add_handler(CommandHandler("rules", show_rules))
     app.add_handler(CallbackQueryHandler(rules_callback, pattern="^rules_"))
-    
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
-    logger.info(f"[{format_sl_time()}] 🤖 Bot starting...")
-    logger.info(f"[{format_sl_time()}] 📊 Monitoring {len(symbols)} coins")
-    logger.info(f"[{format_sl_time()}] ⏰ Scan interval: {SCAN_INTERVAL}s")
-    
+    logger.info(f"[{format_sl_time()}] 🤖 Bot V3 starting | {len(symbols)} coins | {', '.join(SCAN_TIMEFRAMES)}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
