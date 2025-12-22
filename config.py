@@ -29,4 +29,4 @@ ALERT_COOLDOWN = 1800
 RAG_KNOWLEDGE_PATH = "rsi_divergence_ms_rag.json"
 
 # Updated model name for new SDK
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-1.5-flash"
