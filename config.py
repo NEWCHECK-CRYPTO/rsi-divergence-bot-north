@@ -6,10 +6,27 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 EXCHANGE = "binance"
 
-SYMBOLS = [
-    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
-    "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
+# Sri Lanka Timezone
+TIMEZONE = "Asia/Colombo"  # UTC+5:30
+
+# Dynamic symbols - will be fetched from Binance
+# Set to empty list to auto-fetch top 100 by volume
+SYMBOLS = []  # Auto-fetch top 100
+
+# How many top coins to monitor (by 24h volume)
+TOP_COINS_COUNT = 100
+
+# Only USDT pairs
+QUOTE_CURRENCY = "USDT"
+
+# Exclude stablecoins and leveraged tokens
+EXCLUDED_SYMBOLS = [
+    "USDC/USDT", "BUSD/USDT", "TUSD/USDT", "USDP/USDT", "FDUSD/USDT",
+    "DAI/USDT", "USDD/USDT", "EURC/USDT", "AEUR/USDT",
 ]
+
+# Exclude leveraged tokens (contain UP, DOWN, BULL, BEAR)
+EXCLUDE_LEVERAGED = True
 
 SCAN_TIMEFRAMES = ["1d", "4h", "1h"]
 
@@ -24,9 +41,10 @@ SWING_DETECTION_BARS = 5
 PRICE_TOLERANCE_PERCENT = 0.5
 RSI_TOLERANCE = 2.0
 MIN_CONFIDENCE_THRESHOLD = 0.60
-SCAN_INTERVAL = 300
+
+# Scan interval (seconds) - 3 minutes for faster signals
+SCAN_INTERVAL = 180
+
 ALERT_COOLDOWN = 1800
 RAG_KNOWLEDGE_PATH = "rsi_divergence_ms_rag.json"
-
-# Updated model name for new SDK
 GEMINI_MODEL = "gemini-1.5-flash"

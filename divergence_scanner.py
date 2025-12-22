@@ -1,6 +1,7 @@
 """
 Divergence Scanner Module
-Detects RSI divergences and confirms with Market Structure
+Fetches top 100 coins by volume from Binance
+All times in Sri Lanka timezone (Asia/Colombo)
 """
 
 import ccxt
@@ -11,14 +12,36 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 import time
+import pytz
 
 from config import (
     EXCHANGE, SYMBOLS, SCAN_TIMEFRAMES,
     TIMEFRAME_CONFIRMATION_MAP, RSI_PERIOD,
     RSI_LOOKBACK_CANDLES, SWING_DETECTION_BARS,
     PRICE_TOLERANCE_PERCENT, RSI_TOLERANCE,
-    MIN_CONFIDENCE_THRESHOLD, ALERT_COOLDOWN
+    MIN_CONFIDENCE_THRESHOLD, ALERT_COOLDOWN,
+    TOP_COINS_COUNT, QUOTE_CURRENCY, EXCLUDED_SYMBOLS,
+    EXCLUDE_LEVERAGED, TIMEZONE
 )
+
+# Sri Lanka timezone
+SL_TZ = pytz.timezone(TIMEZONE)
+
+
+def get_sl_time() -> datetime:
+    """Get current Sri Lanka time"""
+    return datetime.now(SL_TZ)
+
+
+def format_sl_time(dt: datetime = None) -> str:
+    """Format datetime in Sri Lanka time"""
+    if dt is None:
+        dt = get_sl_time()
+    elif dt.tzinfo is None:
+        dt = pytz.utc.localize(dt).astimezone(SL_TZ)
+    else:
+        dt = dt.astimezone(SL_TZ)
+    return dt.strftime('%Y-%m-%d %H:%M:%S IST')
 
 
 class DivergenceType(Enum):
@@ -97,6 +120,7 @@ class AlertSignal:
     confirmation: MSConfirmation
     total_confidence: float
     timestamp: datetime
+    volume_rank: int  # Rank by 24h volume
 
 
 def calculate_rsi(prices: pd.Series, period: int = 14) -> pd.Series:
@@ -117,6 +141,84 @@ class DivergenceScanner:
             'options': {'defaultType': 'spot'}
         })
         self.last_alerts: Dict[str, datetime] = {}
+        self.symbols_cache: List[str] = []
+        self.symbols_cache_time: datetime = None
+        self.volume_ranks: Dict[str, int] = {}
+    
+    def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
+        """Fetch top coins by 24h trading volume from Binance"""
+        
+        # Cache for 5 minutes
+        if (self.symbols_cache_time and 
+            (datetime.now() - self.symbols_cache_time).total_seconds() < 300 and
+            self.symbols_cache):
+            return self.symbols_cache
+        
+        try:
+            print(f"[{format_sl_time()}] Fetching top {count} coins by volume...")
+            
+            # Fetch all tickers
+            tickers = self.exchange.fetch_tickers()
+            
+            # Filter USDT pairs and sort by volume
+            usdt_pairs = []
+            for symbol, ticker in tickers.items():
+                # Only USDT pairs
+                if not symbol.endswith(f'/{QUOTE_CURRENCY}'):
+                    continue
+                
+                # Exclude stablecoins
+                if symbol in EXCLUDED_SYMBOLS:
+                    continue
+                
+                # Exclude leveraged tokens
+                if EXCLUDE_LEVERAGED:
+                    base = symbol.split('/')[0]
+                    if any(x in base.upper() for x in ['UP', 'DOWN', 'BULL', 'BEAR', '3L', '3S', '2L', '2S']):
+                        continue
+                
+                # Get 24h quote volume (in USDT)
+                quote_volume = ticker.get('quoteVolume', 0) or 0
+                
+                if quote_volume > 0:
+                    usdt_pairs.append({
+                        'symbol': symbol,
+                        'volume': quote_volume,
+                        'price': ticker.get('last', 0)
+                    })
+            
+            # Sort by volume (highest first)
+            usdt_pairs.sort(key=lambda x: x['volume'], reverse=True)
+            
+            # Take top N
+            top_symbols = [p['symbol'] for p in usdt_pairs[:count]]
+            
+            # Store volume ranks
+            self.volume_ranks = {p['symbol']: i+1 for i, p in enumerate(usdt_pairs[:count])}
+            
+            # Cache results
+            self.symbols_cache = top_symbols
+            self.symbols_cache_time = datetime.now()
+            
+            print(f"[{format_sl_time()}] Top 5 by volume: {top_symbols[:5]}")
+            
+            return top_symbols
+            
+        except Exception as e:
+            print(f"[{format_sl_time()}] Error fetching top coins: {e}")
+            # Return cached or default
+            if self.symbols_cache:
+                return self.symbols_cache
+            return [
+                "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT", "SOL/USDT",
+                "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "LINK/USDT", "DOT/USDT"
+            ]
+    
+    def get_symbols_to_scan(self) -> List[str]:
+        """Get list of symbols to scan"""
+        if SYMBOLS and len(SYMBOLS) > 0:
+            return SYMBOLS
+        return self.fetch_top_coins_by_volume(TOP_COINS_COUNT)
     
     def _is_on_cooldown(self, symbol: str, timeframe: str) -> bool:
         key = f"{symbol}_{timeframe}"
@@ -257,6 +359,8 @@ class DivergenceScanner:
         swing_highs = self.find_swing_highs(df)
         swing_lows = self.find_swing_lows(df)
         
+        volume_rank = self.volume_ranks.get(symbol, 999)
+        
         # Check bullish
         bullish_div = self.detect_bullish_divergence(swing_lows, current_price, symbol, timeframe)
         if bullish_div and bullish_div.confidence >= MIN_CONFIDENCE_THRESHOLD:
@@ -264,7 +368,7 @@ class DivergenceScanner:
             if confirmation and confirmation.confirmed:
                 self._set_cooldown(symbol, timeframe)
                 total_conf = min(bullish_div.confidence + (0.10 if "BOS" in confirmation.structure_break.value else 0), 0.95)
-                return AlertSignal(symbol, timeframe, bullish_div.confirmation_tf, bullish_div, confirmation, total_conf, datetime.now())
+                return AlertSignal(symbol, timeframe, bullish_div.confirmation_tf, bullish_div, confirmation, total_conf, get_sl_time(), volume_rank)
         
         # Check bearish
         bearish_div = self.detect_bearish_divergence(swing_highs, current_price, symbol, timeframe)
@@ -273,21 +377,28 @@ class DivergenceScanner:
             if confirmation and confirmation.confirmed:
                 self._set_cooldown(symbol, timeframe)
                 total_conf = min(bearish_div.confidence + (0.10 if "BOS" in confirmation.structure_break.value else 0), 0.95)
-                return AlertSignal(symbol, timeframe, bearish_div.confirmation_tf, bearish_div, confirmation, total_conf, datetime.now())
+                return AlertSignal(symbol, timeframe, bearish_div.confirmation_tf, bearish_div, confirmation, total_conf, get_sl_time(), volume_rank)
         
         return None
     
     def scan_all(self) -> List[AlertSignal]:
         alerts = []
-        for symbol in SYMBOLS:
+        symbols = self.get_symbols_to_scan()
+        
+        print(f"[{format_sl_time()}] Scanning {len(symbols)} symbols...")
+        
+        for symbol in symbols:
             for timeframe in SCAN_TIMEFRAMES:
                 try:
                     alert = self.scan_symbol(symbol, timeframe)
                     if alert:
                         alerts.append(alert)
-                    time.sleep(0.5)
+                        print(f"[{format_sl_time()}] 🚨 Signal: {symbol} {timeframe}")
+                    time.sleep(0.3)  # Rate limiting
                 except Exception as e:
                     print(f"Error scanning {symbol} {timeframe}: {e}")
+        
+        print(f"[{format_sl_time()}] Scan complete. Found {len(alerts)} signals.")
         return alerts
 
 
@@ -324,9 +435,18 @@ class AlertFormatter:
         stop = signal.confirmation.swing_low * 0.995 if is_bull else signal.confirmation.swing_high * 1.005
         target = signal.confirmation.swing_high * 1.01 if is_bull else signal.confirmation.swing_low * 0.99
         
+        # Format price based on value
+        def fmt_price(p):
+            if p >= 1000:
+                return f"${p:,.2f}"
+            elif p >= 1:
+                return f"${p:.4f}"
+            else:
+                return f"${p:.8f}"
+        
         return f"""{emoji} {direction} DIVERGENCE CONFIRMED
 
-📊 {signal.symbol}
+📊 {signal.symbol} (Vol Rank #{signal.volume_rank})
 ⏰ Signal: {signal.signal_tf.upper()} | Confirm: {signal.confirm_tf.upper()}
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -336,24 +456,24 @@ Type: {cls.NAMES[signal.divergence.divergence_type]}
 Pattern: {cls.DESC[signal.divergence.divergence_type]}
 Strength: {signal.divergence.strength}
 
-Point 1: ${signal.divergence.point1.price:,.2f} (RSI: {signal.divergence.point1.rsi:.1f})
-Point 2: ${signal.divergence.point2.price:,.2f} (RSI: {signal.divergence.point2.rsi:.1f})
+Point 1: {fmt_price(signal.divergence.point1.price)} (RSI: {signal.divergence.point1.rsi:.1f})
+Point 2: {fmt_price(signal.divergence.point2.price)} (RSI: {signal.divergence.point2.rsi:.1f})
 
 ━━━━━━━━━━━━━━━━━━━━
 ✅ MS CONFIRMATION
 ━━━━━━━━━━━━━━━━━━━━
 Break: {signal.confirmation.structure_break.value}
-Swing High: ${signal.confirmation.swing_high:,.2f}
-Swing Low: ${signal.confirmation.swing_low:,.2f}
+Swing High: {fmt_price(signal.confirmation.swing_high)}
+Swing Low: {fmt_price(signal.confirmation.swing_low)}
 
 ━━━━━━━━━━━━━━━━━━━━
 🎯 TRADE IDEA ({trade})
 ━━━━━━━━━━━━━━━━━━━━
-Price: ${signal.divergence.current_price:,.2f}
-Stop: ${stop:,.2f}
-Target: ${target:,.2f}
+Price: {fmt_price(signal.divergence.current_price)}
+Stop: {fmt_price(stop)}
+Target: {fmt_price(target)}
 
 🔥 Confidence: {signal.total_confidence * 100:.0f}%
 
 ⚠️ Not financial advice. DYOR!
-⏱️ {signal.timestamp.strftime('%Y-%m-%d %H:%M UTC')}"""
+🇱🇰 {format_sl_time(signal.timestamp)}"""
