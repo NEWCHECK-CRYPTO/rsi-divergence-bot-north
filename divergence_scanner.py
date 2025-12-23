@@ -1,9 +1,9 @@
 """
-Divergence Scanner Module - V5
-- Uses TradingView-TA for RSI (exact TradingView values)
-- CCXT for OHLCV price data only
-- Divergence detection on TV RSI
-- 3 Signal Levels
+Divergence Scanner Module - V6
+- Uses Bybit exchange (no geo-restrictions)
+- TradingView-TA for RSI validation
+- 100 top coins by volume
+- Optimized swing detection
 """
 
 import ccxt
@@ -21,7 +21,7 @@ try:
     HAS_TV_TA = True
 except ImportError:
     HAS_TV_TA = False
-    print("Warning: tradingview-ta not installed. Using fallback RSI calculation.")
+    print("Warning: tradingview-ta not installed.")
 
 from config import (
     EXCHANGE, SYMBOLS, SCAN_TIMEFRAMES,
@@ -63,8 +63,8 @@ def format_sl_time(dt: datetime = None) -> str:
     return dt.strftime('%Y-%m-%d %H:%M:%S IST')
 
 
-def calculate_rsi_fallback(close_prices: pd.Series, period: int = 14) -> pd.Series:
-    """Fallback RSI calculation if TV-TA not available"""
+def calculate_rsi(close_prices: pd.Series, period: int = 14) -> pd.Series:
+    """Calculate RSI using Wilder's Smoothing (TradingView method)"""
     delta = close_prices.diff()
     gains = delta.copy()
     losses = delta.copy()
@@ -128,12 +128,12 @@ class DivergenceSignal:
     swing1: MajorSwing
     swing2: MajorSwing
     current_price: float
-    current_rsi: float  # Current RSI from TradingView
+    current_rsi: float
     price_change_pct: float
     rsi_change: float
     candles_apart: int
     confidence: float
-    tv_recommendation: str  # TradingView recommendation
+    tv_recommendation: str
 
 
 @dataclass
@@ -160,21 +160,23 @@ class AlertSignal:
     volume_rank: int
     tradingview_link: str
     candle_close_time: datetime
-    tv_data: dict  # Extra TradingView indicators
+    tv_data: dict
 
 
 def get_tradingview_link(symbol: str, timeframe: str) -> str:
+    # Use BYBIT for TradingView link
     tv_symbol = symbol.replace("/", "")
     tf_map = {
         "1m": "1", "5m": "5", "15m": "15", "30m": "30",
         "1h": "60", "4h": "240", "1d": "D", "1w": "W", "1M": "M"
     }
     tv_tf = tf_map.get(timeframe, "60")
-    return f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}&interval={tv_tf}"
+    return f"https://www.tradingview.com/chart/?symbol=BYBIT:{tv_symbol}.P&interval={tv_tf}"
 
 
 class DivergenceScanner:
     def __init__(self):
+        # Initialize Bybit exchange
         exchange_class = getattr(ccxt, EXCHANGE)
         self.exchange = exchange_class({
             'enableRateLimit': True,
@@ -184,16 +186,17 @@ class DivergenceScanner:
         self.symbols_cache: List[str] = []
         self.symbols_cache_time: datetime = None
         self.volume_ranks: Dict[str, int] = {}
-        self.tv_cache: Dict[str, dict] = {}  # Cache TV data
+        self.tv_cache: Dict[str, dict] = {}
         self.tv_cache_time: Dict[str, datetime] = {}
+        
+        print(f"[{format_sl_time()}] Initialized {EXCHANGE.upper()} exchange")
     
     def get_tv_symbol(self, symbol: str) -> str:
-        """Convert CCXT symbol to TradingView symbol"""
-        # BTC/USDT -> BTCUSDT
+        """Convert to TradingView symbol format"""
         return symbol.replace("/", "")
     
     def fetch_tv_data(self, symbol: str, timeframe: str) -> Optional[dict]:
-        """Fetch RSI and other indicators from TradingView"""
+        """Fetch indicators from TradingView"""
         if not HAS_TV_TA:
             return None
         
@@ -201,7 +204,6 @@ class DivergenceScanner:
         if not tv_interval:
             return None
         
-        # Check cache (valid for 60 seconds)
         cache_key = f"{symbol}_{timeframe}"
         if cache_key in self.tv_cache:
             cache_age = (datetime.now() - self.tv_cache_time.get(cache_key, datetime.min)).total_seconds()
@@ -211,53 +213,52 @@ class DivergenceScanner:
         try:
             tv_symbol = self.get_tv_symbol(symbol)
             
-            handler = TA_Handler(
-                symbol=tv_symbol,
-                exchange="BINANCE",
-                screener="crypto",
-                interval=tv_interval
-            )
+            # Try BYBIT first, then BINANCE as fallback
+            for exchange in ["BYBIT", "BINANCE"]:
+                try:
+                    handler = TA_Handler(
+                        symbol=tv_symbol,
+                        exchange=exchange,
+                        screener="crypto",
+                        interval=tv_interval
+                    )
+                    analysis = handler.get_analysis()
+                    
+                    data = {
+                        "rsi": analysis.indicators.get("RSI", None),
+                        "rsi_prev": analysis.indicators.get("RSI[1]", None),
+                        "macd": analysis.indicators.get("MACD.macd", None),
+                        "macd_signal": analysis.indicators.get("MACD.signal", None),
+                        "stoch_k": analysis.indicators.get("Stoch.K", None),
+                        "stoch_d": analysis.indicators.get("Stoch.D", None),
+                        "ema20": analysis.indicators.get("EMA20", None),
+                        "ema50": analysis.indicators.get("EMA50", None),
+                        "recommendation": analysis.summary.get("RECOMMENDATION", "NEUTRAL"),
+                        "buy_signals": analysis.summary.get("BUY", 0),
+                        "sell_signals": analysis.summary.get("SELL", 0),
+                    }
+                    
+                    self.tv_cache[cache_key] = data
+                    self.tv_cache_time[cache_key] = datetime.now()
+                    return data
+                    
+                except Exception:
+                    continue
             
-            analysis = handler.get_analysis()
-            
-            data = {
-                "rsi": analysis.indicators.get("RSI", None),
-                "rsi_prev": analysis.indicators.get("RSI[1]", None),  # Previous candle RSI
-                "macd": analysis.indicators.get("MACD.macd", None),
-                "macd_signal": analysis.indicators.get("MACD.signal", None),
-                "stoch_k": analysis.indicators.get("Stoch.K", None),
-                "stoch_d": analysis.indicators.get("Stoch.D", None),
-                "ema20": analysis.indicators.get("EMA20", None),
-                "ema50": analysis.indicators.get("EMA50", None),
-                "bb_upper": analysis.indicators.get("BB.upper", None),
-                "bb_lower": analysis.indicators.get("BB.lower", None),
-                "atr": analysis.indicators.get("ATR", None),
-                "adx": analysis.indicators.get("ADX", None),
-                "recommendation": analysis.summary.get("RECOMMENDATION", "NEUTRAL"),
-                "buy_signals": analysis.summary.get("BUY", 0),
-                "sell_signals": analysis.summary.get("SELL", 0),
-                "neutral_signals": analysis.summary.get("NEUTRAL", 0),
-            }
-            
-            # Cache it
-            self.tv_cache[cache_key] = data
-            self.tv_cache_time[cache_key] = datetime.now()
-            
-            return data
+            return None
             
         except Exception as e:
-            print(f"[TV-TA] Error fetching {symbol} {timeframe}: {e}")
             return None
     
     def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
-        """Fetch top coins by 24h trading volume"""
+        """Fetch top coins by 24h trading volume from Bybit"""
         if (self.symbols_cache_time and 
             (datetime.now() - self.symbols_cache_time).total_seconds() < 300 and
             self.symbols_cache):
             return self.symbols_cache
         
         try:
-            print(f"[{format_sl_time()}] Fetching top {count} coins...")
+            print(f"[{format_sl_time()}] Fetching top {count} coins from {EXCHANGE}...")
             tickers = self.exchange.fetch_tickers()
             
             usdt_pairs = []
@@ -268,7 +269,7 @@ class DivergenceScanner:
                     continue
                 if EXCLUDE_LEVERAGED:
                     base = symbol.split('/')[0]
-                    if any(x in base.upper() for x in ['UP', 'DOWN', 'BULL', 'BEAR', '3L', '3S', '2L', '2S']):
+                    if any(x in base.upper() for x in ['UP', 'DOWN', 'BULL', 'BEAR', '3L', '3S', '2L', '2S', '2X', '3X']):
                         continue
                 
                 quote_volume = ticker.get('quoteVolume', 0) or 0
@@ -282,29 +283,31 @@ class DivergenceScanner:
             self.symbols_cache = top_symbols
             self.symbols_cache_time = datetime.now()
             
-            print(f"[{format_sl_time()}] Loaded {len(top_symbols)} coins")
+            print(f"[{format_sl_time()}] ✅ Loaded {len(top_symbols)} coins")
             return top_symbols
             
         except Exception as e:
-            print(f"[{format_sl_time()}] Error fetching coins: {e}")
+            print(f"[{format_sl_time()}] ❌ Error fetching coins: {e}")
             if self.symbols_cache:
                 return self.symbols_cache
-            return ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
+            # Fallback to common coins
+            return ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
+                    "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT", "MATIC/USDT"]
     
     def get_symbols_to_scan(self) -> List[str]:
         if SYMBOLS and len(SYMBOLS) > 0:
             return SYMBOLS
         return self.fetch_top_coins_by_volume(TOP_COINS_COUNT)
     
-    def fetch_ohlcv_with_tv_rsi(self, symbol: str, timeframe: str, limit: int = None) -> Optional[pd.DataFrame]:
-        """
-        Fetch OHLCV from CCXT, then get RSI from TradingView
-        TradingView only gives current RSI, so we calculate historical using fallback
-        but validate current candle with TV RSI
-        """
+    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = None) -> Optional[pd.DataFrame]:
+        """Fetch OHLCV data from exchange"""
         try:
             fetch_limit = limit or LOOKBACK_CANDLES + 20
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=fetch_limit)
+            
+            if not ohlcv or len(ohlcv) < 20:
+                return None
+            
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
@@ -312,37 +315,28 @@ class DivergenceScanner:
             if len(df) > 1:
                 df = df.iloc[:-1].copy()
             
-            # Calculate RSI using our method for historical
-            df['rsi'] = calculate_rsi_fallback(df['close'], RSI_PERIOD)
+            # Calculate RSI
+            df['rsi'] = calculate_rsi(df['close'], RSI_PERIOD)
             
-            # Get TradingView RSI for current/latest candle
+            # Try to get TV RSI for latest candle
             tv_data = self.fetch_tv_data(symbol, timeframe)
             if tv_data and tv_data.get('rsi') is not None:
-                # Update the last candle's RSI with TradingView value
                 df.loc[df.index[-1], 'rsi'] = tv_data['rsi']
-                df.attrs['tv_data'] = tv_data  # Store TV data in dataframe
-                
-                # Log comparison
-                our_rsi = calculate_rsi_fallback(df['close'], RSI_PERIOD).iloc[-1]
-                tv_rsi = tv_data['rsi']
-                diff = abs(our_rsi - tv_rsi) if pd.notna(our_rsi) else 0
-                if diff > 2:
-                    print(f"[RSI] {symbol} {timeframe}: Ours={our_rsi:.1f} TV={tv_rsi:.1f} (diff={diff:.1f})")
             
+            df.attrs['tv_data'] = tv_data
             return df
             
         except Exception as e:
-            print(f"Error fetching {symbol} {timeframe}: {e}")
+            print(f"[{format_sl_time()}] Error fetching {symbol} {timeframe}: {e}")
             return None
     
     def find_major_swing_highs(self, df: pd.DataFrame) -> List[MajorSwing]:
-        """Find major swing highs"""
+        """Find swing highs"""
         swings = []
         n = SWING_STRENGTH_BARS
         
         for i in range(n, len(df) - n):
             current_high = df['high'].iloc[i]
-            current_close = df['close'].iloc[i]
             
             window_highs = df['high'].iloc[i-n:i+n+1]
             if current_high != window_highs.max():
@@ -360,7 +354,7 @@ class DivergenceScanner:
             
             swings.append(MajorSwing(
                 index=i,
-                price=current_close,
+                price=df['close'].iloc[i],
                 rsi=rsi_val,
                 is_high=True,
                 timestamp=df['timestamp'].iloc[i],
@@ -370,13 +364,12 @@ class DivergenceScanner:
         return swings
     
     def find_major_swing_lows(self, df: pd.DataFrame) -> List[MajorSwing]:
-        """Find major swing lows"""
+        """Find swing lows"""
         swings = []
         n = SWING_STRENGTH_BARS
         
         for i in range(n, len(df) - n):
             current_low = df['low'].iloc[i]
-            current_close = df['close'].iloc[i]
             
             window_lows = df['low'].iloc[i-n:i+n+1]
             if current_low != window_lows.min():
@@ -394,7 +387,7 @@ class DivergenceScanner:
             
             swings.append(MajorSwing(
                 index=i,
-                price=current_close,
+                price=df['close'].iloc[i],
                 rsi=rsi_val,
                 is_high=False,
                 timestamp=df['timestamp'].iloc[i],
@@ -432,7 +425,7 @@ class DivergenceScanner:
         current_rsi = df['rsi'].iloc[idx]
         tv_recommendation = tv_data.get('recommendation', 'NEUTRAL') if tv_data else 'NEUTRAL'
         
-        # Check BULLISH divergence
+        # Check BULLISH divergence (on lows)
         valid_lows = self.filter_significant_swings(swing_lows, idx)
         if len(valid_lows) >= 2:
             swing1, swing2 = valid_lows[-2], valid_lows[-1]
@@ -448,8 +441,6 @@ class DivergenceScanner:
             if swing2.price < swing1.price and swing2.rsi > swing1.rsi:
                 div_type = DivergenceType.BULLISH_REGULAR
                 confidence = min(0.9, 0.6 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
-                
-                # Boost confidence if TV agrees
                 if tv_recommendation in ["BUY", "STRONG_BUY"]:
                     confidence = min(0.95, confidence + 0.05)
             
@@ -467,7 +458,7 @@ class DivergenceScanner:
                     confidence=confidence, tv_recommendation=tv_recommendation
                 )
         
-        # Check BEARISH divergence
+        # Check BEARISH divergence (on highs)
         valid_highs = self.filter_significant_swings(swing_highs, idx)
         if len(valid_highs) >= 2:
             swing1, swing2 = valid_highs[-2], valid_highs[-1]
@@ -483,7 +474,6 @@ class DivergenceScanner:
             if swing2.price > swing1.price and swing2.rsi < swing1.rsi:
                 div_type = DivergenceType.BEARISH_REGULAR
                 confidence = min(0.9, 0.6 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
-                
                 if tv_recommendation in ["SELL", "STRONG_SELL"]:
                     confidence = min(0.95, confidence + 0.05)
             
@@ -504,15 +494,13 @@ class DivergenceScanner:
         return None
     
     def check_momentum(self, df: pd.DataFrame, is_bullish: bool, tv_data: dict = None) -> MomentumStatus:
-        """Check momentum using TV RSI data"""
+        """Check RSI and Price momentum"""
         if len(df) < 3:
             return MomentumStatus(False, "Neutral", [], False, "Neutral", 0.0)
         
-        # Get RSI values
         rsi_current = df['rsi'].iloc[-1]
         rsi_prev = df['rsi'].iloc[-2]
         
-        # If we have TV data with previous RSI, use it
         if tv_data and tv_data.get('rsi_prev') is not None:
             rsi_prev = tv_data['rsi_prev']
         
@@ -559,10 +547,9 @@ class DivergenceScanner:
     def determine_signal_strength(self, divergence: DivergenceSignal, 
                                    momentum: MomentumStatus,
                                    tv_data: dict = None) -> Tuple[SignalStrength, float]:
-        """Determine signal strength with TV confirmation"""
+        """Determine signal strength"""
         base_confidence = divergence.confidence
         
-        # Extra boost if TV recommendation aligns
         is_bullish = "BULLISH" in divergence.divergence_type.value.upper()
         tv_rec = tv_data.get('recommendation', 'NEUTRAL') if tv_data else 'NEUTRAL'
         
@@ -600,29 +587,25 @@ class DivergenceScanner:
         self.last_alerts[key] = datetime.now()
     
     def scan_symbol(self, symbol: str, timeframe: str) -> List[AlertSignal]:
-        """Scan a single symbol using TV-TA RSI"""
+        """Scan a single symbol"""
         alerts = []
         
         if self._is_on_cooldown(symbol, timeframe):
             return alerts
         
-        df = self.fetch_ohlcv_with_tv_rsi(symbol, timeframe)
-        if df is None or len(df) < LOOKBACK_CANDLES:
+        df = self.fetch_ohlcv(symbol, timeframe)
+        if df is None or len(df) < 20:
             return alerts
         
-        # Get TV data
-        tv_data = df.attrs.get('tv_data', None) or self.fetch_tv_data(symbol, timeframe)
+        tv_data = df.attrs.get('tv_data', None)
         
-        # Find swings
         swing_highs = self.find_major_swing_highs(df)
         swing_lows = self.find_major_swing_lows(df)
         
         idx = len(df) - 1
-        current_price = df['close'].iloc[idx]
         candle_close_time = df['timestamp'].iloc[idx]
         volume_rank = self.volume_ranks.get(symbol, 999)
         
-        # Detect divergence
         divergence = self.detect_divergence(df, idx, swing_lows, swing_highs, symbol, timeframe, tv_data)
         
         if divergence:
@@ -653,13 +636,13 @@ class DivergenceScanner:
         return alerts
     
     def scan_all(self, min_strength: SignalStrength = None) -> List[AlertSignal]:
-        """Scan all symbols"""
+        """Scan all symbols and timeframes"""
         all_alerts = []
         symbols = self.get_symbols_to_scan()
         
-        print(f"[{format_sl_time()}] Scanning {len(symbols)} coins × {len(SCAN_TIMEFRAMES)} TFs")
-        print(f"[{format_sl_time()}] Using TradingView RSI: {HAS_TV_TA}")
+        print(f"[{format_sl_time()}] 🔍 Scanning {len(symbols)} coins × {len(SCAN_TIMEFRAMES)} TFs")
         
+        scanned = 0
         for symbol in symbols:
             for timeframe in SCAN_TIMEFRAMES:
                 try:
@@ -674,17 +657,18 @@ class DivergenceScanner:
                     
                     for alert in alerts:
                         emoji = "🟢" if alert.signal_strength == SignalStrength.STRONG else "🟡" if alert.signal_strength == SignalStrength.MEDIUM else "🔴"
-                        tv_status = f"TV:{alert.divergence.tv_recommendation}" if alert.divergence.tv_recommendation else ""
-                        print(f"[{format_sl_time()}] {emoji} {alert.signal_strength.value.upper()}: {symbol} {timeframe} RSI={alert.divergence.current_rsi:.1f} {tv_status}")
+                        print(f"[{format_sl_time()}] {emoji} {symbol} {timeframe}: {alert.divergence.divergence_type.value}")
                     
-                    time.sleep(0.15)  # Slightly faster with caching
+                    scanned += 1
+                    time.sleep(0.1)  # Rate limit
+                    
                 except Exception as e:
                     print(f"Error scanning {symbol} {timeframe}: {e}")
         
         strength_order = {SignalStrength.STRONG: 3, SignalStrength.MEDIUM: 2, SignalStrength.EARLY: 1}
         all_alerts.sort(key=lambda x: (strength_order.get(x.signal_strength, 0), x.total_confidence), reverse=True)
         
-        print(f"[{format_sl_time()}] Scan complete. Found {len(all_alerts)} signals.")
+        print(f"[{format_sl_time()}] ✅ Scanned {scanned} pairs. Found {len(all_alerts)} signals.")
         return all_alerts
 
 
@@ -750,7 +734,6 @@ class AlertFormatter:
         div = signal.divergence
         tv = signal.tv_data
         
-        # TV Recommendation styling
         tv_rec = div.tv_recommendation
         if tv_rec in ["STRONG_BUY", "BUY"]:
             tv_emoji = "🟢"
@@ -761,47 +744,27 @@ class AlertFormatter:
         
         return f"""{strength_emoji} {strength_label} SIGNAL - {direction}
 
-📊 {signal.symbol} (Vol Rank #{signal.volume_rank})
-⏰ Timeframe: {signal.signal_tf.upper()}
-🕐 Candle Close: {candle_time_str}
+📊 {signal.symbol} (#{signal.volume_rank})
+⏰ {signal.signal_tf.upper()} | {candle_time_str}
 
-{'━'*30}
-📈 DIVERGENCE DETECTED
-{'━'*30}
+{'━'*28}
 {cls.DIV_NAMES[div.divergence_type]}
 {cls.DIV_DESC[div.divergence_type]}
 
 Swing 1: {cls.fmt_price(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
 Swing 2: {cls.fmt_price(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
-Current: {cls.fmt_price(div.current_price)} (RSI: {div.current_rsi:.1f})
+Now: {cls.fmt_price(div.current_price)} (RSI: {div.current_rsi:.1f})
 
-📏 Distance: {div.candles_apart} candles
-📊 Price: {div.price_change_pct:+.2f}% | RSI: {div.rsi_change:+.1f}
-
-{'━'*30}
-📺 TRADINGVIEW DATA
-{'━'*30}
-{tv_emoji} Recommendation: {tv_rec}
-RSI: {tv.get('rsi', 'N/A'):.1f if tv.get('rsi') else 'N/A'}
-MACD: {tv.get('macd', 'N/A'):.2f if tv.get('macd') else 'N/A'}
-Stoch K: {tv.get('stoch_k', 'N/A'):.1f if tv.get('stoch_k') else 'N/A'}
-
-{'━'*30}
-✅ MOMENTUM CHECK
-{'━'*30}
+📏 {div.candles_apart} candles apart
+{'━'*28}
+{tv_emoji} TradingView: {tv_rec}
 {rsi_emoji} RSI: {signal.momentum.rsi_direction}
-{price_emoji} Price: {signal.momentum.price_direction} ({signal.momentum.price_change_pct:+.2f}%)
-
-{'━'*30}
-🎯 TRADE IDEA ({trade})
-{'━'*30}
-Entry: {cls.fmt_price(entry)}
-Stop Loss: {cls.fmt_price(stop)}
-Target: {cls.fmt_price(target)}
+{price_emoji} Price: {signal.momentum.price_direction}
+{'━'*28}
+🎯 {trade} | Entry: {cls.fmt_price(entry)}
+🛑 SL: {cls.fmt_price(stop)} | 🎯 TP: {cls.fmt_price(target)}
 
 🔥 Confidence: {signal.total_confidence * 100:.0f}%
-
 📺 {signal.tradingview_link}
 
-⚠️ DYOR - Not financial advice!
-🇱🇰 {format_sl_time(signal.timestamp)}"""
+⚠️ DYOR | 🇱🇰 {format_sl_time(signal.timestamp)}"""
