@@ -1,9 +1,9 @@
 """
-RSI Divergence Alert Bot - V3
-- 3 Signal Levels: Strong, Medium, Early
-- TradingView RSI Calculation
-- Proper Candle Close Logic
-- Sri Lanka Time
+RSI Divergence Alert Bot - V4 with Trade Journal
+- Proper Lookback Range
+- Significant Swing Detection  
+- Trade Journal & Tracking
+- RAG-Powered Performance Analysis
 """
 
 import asyncio
@@ -17,22 +17,22 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-from config import TELEGRAM_TOKEN, SCAN_TIMEFRAMES, SCAN_INTERVAL, TOP_COINS_COUNT, TIMEZONE
+from config import (
+    TELEGRAM_TOKEN, SCAN_TIMEFRAMES, SCAN_INTERVAL, TOP_COINS_COUNT, TIMEZONE,
+    LOOKBACK_CANDLES, MIN_SWING_DISTANCE, MIN_PRICE_MOVE_PCT, SWING_STRENGTH_BARS,
+    GEMINI_API_KEY
+)
 from divergence_scanner import (
-    DivergenceScanner, AlertFormatter, SignalStrength,
-    get_sl_time, format_sl_time
+    DivergenceScanner, AlertFormatter, SignalStrength, get_sl_time, format_sl_time
 )
+from trade_journal import journal
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 scanner = DivergenceScanner()
 rag = None
 subscribers = {}
-
 SL_TZ = pytz.timezone(TIMEZONE)
 
 
@@ -42,46 +42,40 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/html')
         self.end_headers()
         symbols = scanner.get_symbols_to_scan()
-        top_5 = symbols[:5] if symbols else []
-        html = f"""<!DOCTYPE html><html><head><title>RSI Bot V3</title><meta http-equiv="refresh" content="30">
-<style>body{{font-family:sans-serif;background:#1a1a2e;color:#fff;padding:40px}}
-.card{{background:rgba(255,255,255,0.05);border-radius:16px;padding:24px;margin:20px 0}}
-.status{{background:#00c853;padding:8px 16px;border-radius:20px;color:#000}}</style></head>
-<body><h1>🤖 RSI Divergence Bot V3</h1>
-<div class="card"><span class="status">✅ Running</span><p>🇱🇰 {format_sl_time()}</p>
-<p>📊 {len(symbols)} coins | 👥 {len(subscribers)} subscribers | ⏰ {SCAN_INTERVAL//60}m interval</p></div>
-<div class="card"><h3>Signal Levels</h3><p>🟢 STRONG | 🟡 MEDIUM | 🔴 EARLY</p></div>
-<div class="card"><h3>Top 5</h3><p>{', '.join(top_5)}</p></div>
-<div class="card"><h3>Timeframes</h3><p>{', '.join(SCAN_TIMEFRAMES)}</p></div></body></html>"""
+        stats = journal.get_stats()
+        html = f"""<!DOCTYPE html><html><head><title>RSI Bot V4</title>
+<style>body{{font-family:system-ui;background:#1a1a2e;color:#fff;padding:40px}}</style></head>
+<body><h1>🤖 RSI Bot V4 + Journal</h1>
+<p>🇱🇰 {format_sl_time()}</p>
+<p>📊 {len(symbols)} coins | 👥 {len(subscribers)} subs | 📝 {stats['total']} trades | {stats['win_rate']:.0f}% WR</p>
+</body></html>"""
         self.wfile.write(html.encode())
-    def log_message(self, format, *args): pass
-
+    def log_message(self, f, *a): pass
 
 def run_web_server():
-    port = int(os.environ.get('PORT', 8080))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    logger.info(f"Health server on port {port}")
+    server = HTTPServer(('0.0.0.0', int(os.environ.get('PORT', 8080))), HealthHandler)
     server.serve_forever()
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = journal.get_stats()
     symbols = scanner.get_symbols_to_scan()
     await update.message.reply_text(
-        f"🤖 *RSI Divergence Bot V3*\n\n"
-        f"📊 *{len(symbols)}* coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"📈 TradingView RSI | 🇱🇰 Sri Lanka time\n\n"
-        f"*Signal Levels:*\n"
-        f"🟢 STRONG - Div + MS + Momentum\n"
-        f"🟡 MEDIUM - Div + Momentum\n"
-        f"🔴 EARLY - Divergence forming\n\n"
+        f"🤖 *RSI Divergence Bot V4*\n\n"
+        f"📊 {len(symbols)} coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n\n"
+        f"*Features:*\n"
+        f"📝 Trade Journal - auto-logs signals\n"
+        f"🤖 AI Analysis - performance insights\n"
+        f"📏 Proper swing detection (V4)\n\n"
+        f"*Journal:* {stats['total']} trades | {stats['win_rate']:.0f}% WR\n\n"
         f"*Commands:*\n"
-        f"/subscribe - All signals\n"
-        f"/subscribe strong - Strong only\n"
-        f"/subscribe medium - Medium+\n"
-        f"/scan - Manual scan\n"
-        f"/status - Bot status\n"
-        f"/top - Top 20 coins\n"
-        f"/rules - Trading rules",
+        f"/subscribe - Get alerts\n"
+        f"/journal - Statistics\n"
+        f"/open - Open trades\n"
+        f"/close <id> win|loss - Record result\n"
+        f"/analyze - AI analysis\n"
+        f"/ask <question> - Ask anything\n"
+        f"/scan - Manual scan",
         parse_mode='Markdown')
 
 
@@ -89,112 +83,250 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     min_strength = SignalStrength.EARLY
     if context.args:
-        level = context.args[0].lower()
-        if level == "strong": min_strength = SignalStrength.STRONG
-        elif level == "medium": min_strength = SignalStrength.MEDIUM
-    
+        if context.args[0].lower() == "strong": min_strength = SignalStrength.STRONG
+        elif context.args[0].lower() == "medium": min_strength = SignalStrength.MEDIUM
     subscribers[chat_id] = {"min_strength": min_strength}
-    strength_text = {
-        SignalStrength.STRONG: "🟢 Strong only",
-        SignalStrength.MEDIUM: "🟡 Medium+",
-        SignalStrength.EARLY: "🔴🟡🟢 All signals"
-    }
-    symbols = scanner.get_symbols_to_scan()
-    await update.message.reply_text(
-        f"✅ *Subscribed!*\n\n"
-        f"📊 {len(symbols)} coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"🔔 {strength_text[min_strength]}\n"
-        f"🇱🇰 {format_sl_time()}",
-        parse_mode='Markdown')
+    await update.message.reply_text(f"✅ Subscribed! All signals logged to journal.\n🇱🇰 {format_sl_time()}")
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id in subscribers:
-        del subscribers[update.effective_chat.id]
+    subscribers.pop(update.effective_chat.id, None)
     await update.message.reply_text("❌ Unsubscribed")
 
 
-async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    symbols = scanner.get_symbols_to_scan()
-    await update.message.reply_text(
-        f"📊 *Status*\n\n"
-        f"🪙 {len(symbols)} coins\n"
-        f"⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"👥 {len(subscribers)} subscribers\n"
-        f"🇱🇰 {format_sl_time()}\n\n"
-        f"*Top 10:*\n" + "\n".join([f"#{i+1} {s}" for i, s in enumerate(symbols[:10])]),
-        parse_mode='Markdown')
+async def show_journal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = journal.format_stats_message()
+    keyboard = [[
+        InlineKeyboardButton("📊 By TF", callback_data="stats_tf"),
+        InlineKeyboardButton("💰 By Symbol", callback_data="stats_symbol"),
+        InlineKeyboardButton("🤖 Analyze", callback_data="stats_analyze")
+    ]]
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def show_top_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Fetching...")
+async def show_open_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(journal.format_open_trades(), parse_mode='Markdown')
+
+
+async def close_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: `/close <id> win|loss [price]`\nUse /open to see IDs", parse_mode='Markdown')
+        return
+    
+    trade_id, outcome_str = context.args[0], context.args[1].lower()
+    exit_price = float(context.args[2]) if len(context.args) > 2 else None
+    
+    outcome = ("win_tp" if outcome_str == "win" else "loss_sl") if not exit_price else ("win_manual" if outcome_str == "win" else "loss_manual")
+    
+    if journal.update_outcome(trade_id, outcome, exit_price):
+        trade = next((t for t in journal.entries if t.id == trade_id), None)
+        emoji = "✅" if "win" in outcome else "❌"
+        await update.message.reply_text(f"{emoji} Trade `{trade_id}` closed: {trade.pnl_percent:+.2f}%", parse_mode='Markdown')
+    else:
+        await update.message.reply_text(f"❌ Trade `{trade_id}` not found", parse_mode='Markdown')
+
+
+async def analyze_performance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = journal.get_stats()
+    if stats['total'] < 3:
+        await update.message.reply_text(f"📊 Need at least 3 closed trades. You have {stats['total']}.")
+        return
+    
+    await update.message.reply_text("🤖 Analyzing...")
+    
     try:
-        symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
-        lines = ["🔥 *Top 20 by Volume*\n"]
-        for i, s in enumerate(symbols[:20], 1):
-            medal = "🥇" if i==1 else "🥈" if i==2 else "🥉" if i==3 else f"#{i}"
-            lines.append(f"{medal} {s}")
-        lines.append(f"\n🇱🇰 {format_sl_time()}")
-        await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+        if rag:
+            analysis = rag.query(journal.generate_analysis_prompt())
+            await update.message.reply_text(f"🤖 *AI Analysis*\n\n{analysis}", parse_mode='Markdown')
+        else:
+            by_str = journal.get_stats_by_strength()
+            by_dir = journal.get_stats_by_direction()
+            best_str = max(by_str.items(), key=lambda x: x[1]['win_rate'] if x[1]['total'] > 0 else 0)
+            
+            await update.message.reply_text(
+                f"🤖 *Analysis*\n\n"
+                f"{'✅ Profitable' if stats['total_pnl'] > 0 else '❌ Losing'}\n"
+                f"Win Rate: {stats['win_rate']:.0f}%\n"
+                f"Profit Factor: {stats['profit_factor']:.2f}\n\n"
+                f"Best: {best_str[0].upper()} ({best_str[1]['win_rate']:.0f}% WR)\n\n"
+                f"💡 {'Focus on ' + best_str[0].upper() + ' signals' if best_str[1]['total'] > 2 else 'Need more data'}",
+                parse_mode='Markdown')
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "stats_tf":
+        by_tf = journal.get_stats_by_timeframe()
+        msg = "📊 *By Timeframe*\n\n" + "\n".join([f"• {tf}: {s['total']} trades, {s['win_rate']:.0f}% WR" for tf, s in by_tf.items()]) if by_tf else "No data"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif query.data == "stats_symbol":
+        by_sym = journal.get_stats_by_symbol()
+        msg = "📊 *By Symbol (Top 10)*\n\n" + "\n".join([f"• {s}: {st['total']} trades, {st['win_rate']:.0f}% WR" for s, st in list(by_sym.items())[:10]]) if by_sym else "No data"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif query.data == "stats_analyze":
+        await query.edit_message_text("Use /analyze for full AI analysis")
+
+
+async def ask_rag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /ask <your question>")
+        return
+    question = " ".join(context.args)
+    await update.message.reply_text("🤔 Thinking...")
+    try:
+        if rag:
+            await update.message.reply_text(f"🤖 {rag.query(question)}")
+        else:
+            await update.message.reply_text("⚠️ Gemini not configured")
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
 
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
-    await update.message.reply_text(f"🔍 Scanning {len(symbols)} coins...\n⏳ 3-5 minutes\n🇱🇰 {format_sl_time()}")
+    await update.message.reply_text(
+        f"🔍 *Scanning {len(symbols)} coins...*\n\n"
+        f"⚙️ Settings:\n"
+        f"• Lookback: {LOOKBACK_CANDLES} candles\n"
+        f"• Min distance: {MIN_SWING_DISTANCE} candles\n"
+        f"• Min move: {MIN_PRICE_MOVE_PCT}%\n"
+        f"• Swing strength: {SWING_STRENGTH_BARS} bars\n\n"
+        f"⏳ This may take 3-5 minutes...",
+        parse_mode='Markdown')
+    
     try:
         alerts = scanner.scan_all()
         if alerts:
-            strong = len([a for a in alerts if a.signal_strength == SignalStrength.STRONG])
-            medium = len([a for a in alerts if a.signal_strength == SignalStrength.MEDIUM])
-            early = len([a for a in alerts if a.signal_strength == SignalStrength.EARLY])
-            await update.message.reply_text(f"✅ *Found {len(alerts)} signals!*\n🟢 {strong} | 🟡 {medium} | 🔴 {early}", parse_mode='Markdown')
+            await update.message.reply_text(f"✅ Found {len(alerts)} signals!")
             for alert in alerts:
-                await update.message.reply_text(AlertFormatter.format_alert(alert))
+                trade_id = journal.add_entry(alert)
+                msg = AlertFormatter.format_alert(alert) + f"\n\n📝 ID: `{trade_id}`"
+                await update.message.reply_text(msg)
                 await asyncio.sleep(0.5)
         else:
-            await update.message.reply_text(f"📭 No signals\n🇱🇰 {format_sl_time()}")
+            # Give helpful feedback
+            await update.message.reply_text(
+                f"📭 *No signals found*\n\n"
+                f"Possible reasons:\n"
+                f"• Market ranging (no clear divergences)\n"
+                f"• Swings not significant enough\n"
+                f"• Need to wait for patterns to form\n\n"
+                f"💡 Try `/scan` again in 1-2 hours, or\n"
+                f"adjust settings in config.py\n\n"
+                f"🇱🇰 {format_sl_time()}",
+                parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ {e}")
+        await update.message.reply_text(f"❌ Error: {e}\n\nCheck Northflank logs for details.")
 
 
-async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🟢 Bullish", callback_data="rules_bullish"),
-                 InlineKeyboardButton("🔴 Bearish", callback_data="rules_bearish")],
-                [InlineKeyboardButton("📈 MS", callback_data="rules_ms"),
-                 InlineKeyboardButton("📊 Signals", callback_data="rules_signals")]]
-    await update.message.reply_text("📚 *Trading Rules*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+async def show_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    symbols = scanner.fetch_top_coins_by_volume(20)
+    msg = "🔥 *Top 20*\n\n" + "\n".join([f"#{i+1} {s}" for i, s in enumerate(symbols)])
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 
-async def rules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    rules = {
-        "bullish": "🟢 *BULLISH*\n• Strong: Price LL + RSI HL\n• Medium: Price DB + RSI HL\n• Hidden: Price HL + RSI LL\n\n✅ RSI rising\n✅ Price rising",
-        "bearish": "🔴 *BEARISH*\n• Strong: Price HH + RSI LH\n• Medium: Price DT + RSI LH\n• Hidden: Price LH + RSI HH\n\n✅ RSI falling\n✅ Price falling",
-        "ms": "📈 *MARKET STRUCTURE*\n• BOS = Break of Structure\n• CHoCH = Change of Character",
-        "signals": "📊 *SIGNALS*\n🟢 STRONG: Div+MS+Momentum\n🟡 MEDIUM: Div+Momentum\n🔴 EARLY: Div forming"
-    }
-    await query.edit_message_text(rules.get(query.data.replace("rules_",""), "N/A"), parse_mode='Markdown')
+async def debug_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug: Scan one symbol and show what's found"""
+    symbol = context.args[0] if context.args else "BTC/USDT"
+    timeframe = context.args[1] if len(context.args) > 1 else "4h"
+    
+    await update.message.reply_text(f"🔍 Debug scan: {symbol} {timeframe}...")
+    
+    try:
+        df = scanner.fetch_ohlcv(symbol, timeframe)
+        if df is None:
+            await update.message.reply_text(f"❌ Could not fetch {symbol} data")
+            return
+        
+        swing_highs = scanner.find_major_swing_highs(df)
+        swing_lows = scanner.find_major_swing_lows(df)
+        
+        msg = f"🔍 *Debug: {symbol} {timeframe}*\n\n"
+        msg += f"📊 Candles fetched: {len(df)}\n"
+        msg += f"📈 Swing Highs found: {len(swing_highs)}\n"
+        msg += f"📉 Swing Lows found: {len(swing_lows)}\n\n"
+        
+        if swing_highs:
+            msg += f"*Last 3 Swing Highs:*\n"
+            for sh in swing_highs[-3:]:
+                msg += f"• ${sh.price:,.2f} (RSI: {sh.rsi:.1f}) - idx {sh.index}\n"
+        
+        if swing_lows:
+            msg += f"\n*Last 3 Swing Lows:*\n"
+            for sl in swing_lows[-3:]:
+                msg += f"• ${sl.price:,.2f} (RSI: {sl.rsi:.1f}) - idx {sl.index}\n"
+        
+        # Check if divergence would be detected
+        idx = len(df) - 1
+        valid_lows = scanner.filter_significant_swings(swing_lows, idx)
+        valid_highs = scanner.filter_significant_swings(swing_highs, idx)
+        
+        msg += f"\n*After filtering:*\n"
+        msg += f"Valid lows: {len(valid_lows)}\n"
+        msg += f"Valid highs: {len(valid_highs)}\n"
+        
+        if len(valid_lows) >= 2:
+            p1, p2 = valid_lows[-2], valid_lows[-1]
+            price_pct = ((p2.price - p1.price) / p1.price) * 100
+            rsi_change = p2.rsi - p1.rsi
+            distance = p2.index - p1.index
+            msg += f"\n*Bullish check:*\n"
+            msg += f"Price change: {price_pct:+.2f}%\n"
+            msg += f"RSI change: {rsi_change:+.1f}\n"
+            msg += f"Distance: {distance} candles\n"
+            
+            if p2.price < p1.price and p2.rsi > p1.rsi:
+                msg += "✅ *BULLISH DIVERGENCE DETECTED!*\n"
+            else:
+                msg += "❌ No bullish divergence\n"
+        
+        if len(valid_highs) >= 2:
+            p1, p2 = valid_highs[-2], valid_highs[-1]
+            price_pct = ((p2.price - p1.price) / p1.price) * 100
+            rsi_change = p2.rsi - p1.rsi
+            distance = p2.index - p1.index
+            msg += f"\n*Bearish check:*\n"
+            msg += f"Price change: {price_pct:+.2f}%\n"
+            msg += f"RSI change: {rsi_change:+.1f}\n"
+            msg += f"Distance: {distance} candles\n"
+            
+            if p2.price > p1.price and p2.rsi < p1.rsi:
+                msg += "✅ *BEARISH DIVERGENCE DETECTED!*\n"
+            else:
+                msg += "❌ No bearish divergence\n"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Debug error: {e}")
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
     if not subscribers: return
-    logger.info(f"[{format_sl_time()}] Scanning for {len(subscribers)} subscribers")
+    logger.info(f"[{format_sl_time()}] Scanning...")
+    
     try:
         alerts = scanner.scan_all()
         if not alerts: return
+        
         strength_order = {SignalStrength.STRONG: 3, SignalStrength.MEDIUM: 2, SignalStrength.EARLY: 1}
+        
+        for alert in alerts:
+            trade_id = journal.add_entry(alert)
+            logger.info(f"Logged {trade_id}: {alert.symbol}")
+        
         for chat_id, prefs in subscribers.items():
             min_level = strength_order.get(prefs.get("min_strength", SignalStrength.EARLY), 1)
-            user_alerts = [a for a in alerts if strength_order.get(a.signal_strength, 0) >= min_level]
-            for alert in user_alerts:
+            for alert in [a for a in alerts if strength_order.get(a.signal_strength, 0) >= min_level]:
                 try:
-                    await context.bot.send_message(chat_id=chat_id, text=AlertFormatter.format_alert(alert))
-                except Exception as e:
-                    logger.error(f"Send error: {e}")
-        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} alerts")
+                    entry = next((e for e in journal.entries[-len(alerts):] if e.symbol == alert.symbol), None)
+                    msg = AlertFormatter.format_alert(alert) + f"\n\n📝 ID: `{entry.id if entry else 'N/A'}`"
+                    await context.bot.send_message(chat_id=chat_id, text=msg)
+                except: pass
     except Exception as e:
         logger.error(f"Scan error: {e}")
 
@@ -202,33 +334,35 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
 def main():
     global rag
     threading.Thread(target=run_web_server, daemon=True).start()
-    logger.info(f"[{format_sl_time()}] Health server started")
     
     try:
-        from config import GEMINI_API_KEY
         if GEMINI_API_KEY and len(GEMINI_API_KEY) > 10:
             from rag_module import TradingKnowledgeRAG
             rag = TradingKnowledgeRAG()
-            logger.info(f"[{format_sl_time()}] Gemini RAG ready")
+            logger.info("RAG ready")
     except: pass
     
-    symbols = scanner.get_symbols_to_scan()
-    logger.info(f"[{format_sl_time()}] Loaded {len(symbols)} symbols")
+    logger.info(f"Journal: {journal.get_stats()['total']} trades")
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
+    app.add_handler(CommandHandler("journal", show_journal))
+    app.add_handler(CommandHandler("open", show_open_trades))
+    app.add_handler(CommandHandler("close", close_trade))
+    app.add_handler(CommandHandler("analyze", analyze_performance))
+    app.add_handler(CommandHandler("ask", ask_rag))
     app.add_handler(CommandHandler("scan", manual_scan))
-    app.add_handler(CommandHandler("top", show_top_coins))
-    app.add_handler(CommandHandler("status", show_status))
-    app.add_handler(CommandHandler("rules", show_rules))
-    app.add_handler(CallbackQueryHandler(rules_callback, pattern="^rules_"))
+    app.add_handler(CommandHandler("top", show_top))
+    app.add_handler(CommandHandler("debug", debug_scan))
+    app.add_handler(CallbackQueryHandler(stats_callback, pattern="^stats_"))
+    
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
-    logger.info(f"[{format_sl_time()}] 🤖 Bot V3 starting | {len(symbols)} coins | {', '.join(SCAN_TIMEFRAMES)}")
+    logger.info(f"🤖 Bot V4 + Journal starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()

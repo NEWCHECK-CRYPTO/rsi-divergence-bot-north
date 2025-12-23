@@ -1,9 +1,11 @@
 """
-Divergence Scanner Module - V3
-- TradingView RSI Calculation (Wilder's Smoothing/RMA)
-- Proper Candle Close Logic
-- 3 Signal Levels: Strong, Medium, Early
-- RSI Momentum + Price Action confirmation
+Divergence Scanner Module - V4
+- Proper Lookback Range (50-100 candles)
+- Significant Swing Detection (not noise)
+- Minimum Swing Distance
+- Minimum Price Move %
+- TradingView RSI Calculation
+- 3 Signal Levels
 """
 
 import ccxt
@@ -19,10 +21,10 @@ import pytz
 from config import (
     EXCHANGE, SYMBOLS, SCAN_TIMEFRAMES,
     TIMEFRAME_CONFIRMATION_MAP, RSI_PERIOD,
-    RSI_LOOKBACK_CANDLES, SWING_DETECTION_BARS,
-    PRICE_TOLERANCE_PERCENT, RSI_TOLERANCE,
     ALERT_COOLDOWN, TOP_COINS_COUNT, QUOTE_CURRENCY, 
-    EXCLUDED_SYMBOLS, EXCLUDE_LEVERAGED, TIMEZONE
+    EXCLUDED_SYMBOLS, EXCLUDE_LEVERAGED, TIMEZONE,
+    LOOKBACK_CANDLES, MIN_SWING_DISTANCE, MIN_PRICE_MOVE_PCT,
+    SWING_STRENGTH_BARS
 )
 
 # Sri Lanka timezone
@@ -44,54 +46,36 @@ def format_sl_time(dt: datetime = None) -> str:
 
 
 def calculate_rsi_tradingview(close_prices: pd.Series, period: int = 14) -> pd.Series:
-    """
-    Calculate RSI exactly like TradingView using Wilder's Smoothing Method (RMA)
-    
-    TradingView Formula:
-    1. Calculate price changes (delta)
-    2. Separate gains and losses
-    3. First average: SMA of first N periods
-    4. Subsequent: RMA = (prev_avg * (N-1) + current) / N
-    5. RS = avg_gain / avg_loss
-    6. RSI = 100 - (100 / (1 + RS))
-    """
-    # Calculate price changes
+    """Calculate RSI using Wilder's Smoothing (TradingView method)"""
     delta = close_prices.diff()
     
-    # Separate gains and losses
     gains = delta.copy()
     losses = delta.copy()
     gains[gains < 0] = 0
     losses[losses > 0] = 0
     losses = abs(losses)
     
-    # Initialize RSI series
     rsi = pd.Series(index=close_prices.index, dtype=float)
     
-    # Need at least period + 1 values
     if len(close_prices) < period + 1:
         return rsi
     
-    # First average: SMA of first N periods
     first_avg_gain = gains.iloc[1:period + 1].mean()
     first_avg_loss = losses.iloc[1:period + 1].mean()
     
     avg_gain = first_avg_gain
     avg_loss = first_avg_loss
     
-    # Calculate first RSI value
     if avg_loss == 0:
         rsi.iloc[period] = 100
     else:
         rs = avg_gain / avg_loss
         rsi.iloc[period] = 100 - (100 / (1 + rs))
     
-    # Calculate subsequent RSI values using Wilder's smoothing (RMA)
     for i in range(period + 1, len(close_prices)):
         current_gain = gains.iloc[i]
         current_loss = losses.iloc[i]
         
-        # Wilder's smoothing: RMA = (prev_avg * (period - 1) + current) / period
         avg_gain = (avg_gain * (period - 1) + current_gain) / period
         avg_loss = (avg_loss * (period - 1) + current_loss) / period
         
@@ -105,20 +89,16 @@ def calculate_rsi_tradingview(close_prices: pd.Series, period: int = 14) -> pd.S
 
 
 class SignalStrength(Enum):
-    STRONG = "strong"    # Divergence + MS + RSI + Price confirmed
-    MEDIUM = "medium"    # Divergence + (RSI or Price) confirmed
-    EARLY = "early"      # Divergence forming
+    STRONG = "strong"
+    MEDIUM = "medium"
+    EARLY = "early"
 
 
 class DivergenceType(Enum):
-    STRONG_BULLISH = "strong_bullish"
-    MEDIUM_BULLISH = "medium_bullish"
-    WEAK_BULLISH = "weak_bullish"
-    HIDDEN_BULLISH = "hidden_bullish"
-    STRONG_BEARISH = "strong_bearish"
-    MEDIUM_BEARISH = "medium_bearish"
-    WEAK_BEARISH = "weak_bearish"
-    HIDDEN_BEARISH = "hidden_bearish"
+    BULLISH_REGULAR = "bullish_regular"      # Price LL, RSI HL
+    BULLISH_HIDDEN = "bullish_hidden"        # Price HL, RSI LL
+    BEARISH_REGULAR = "bearish_regular"      # Price HH, RSI LH
+    BEARISH_HIDDEN = "bearish_hidden"        # Price LH, RSI HH
 
 
 class StructureBreak(Enum):
@@ -130,23 +110,14 @@ class StructureBreak(Enum):
 
 
 @dataclass
-class MomentumStatus:
-    rsi_confirmed: bool
-    rsi_direction: str  # "Rising", "Falling", "Neutral"
-    rsi_values: List[float]  # Last 3 RSI values (closed candles)
-    price_confirmed: bool
-    price_direction: str  # "Rising", "Falling", "Neutral"
-    price_values: List[float]  # Last 3 close prices (closed candles)
-    price_change_pct: float
-
-
-@dataclass
-class SwingPoint:
+class MajorSwing:
+    """Represents a significant swing point"""
     index: int
-    price: float  # Close price at swing
+    price: float
     rsi: float
     is_high: bool
     timestamp: datetime
+    strength: float  # How significant this swing is (% move)
 
 
 @dataclass
@@ -154,38 +125,23 @@ class DivergenceSignal:
     symbol: str
     timeframe: str
     divergence_type: DivergenceType
-    point1: SwingPoint
-    point2: SwingPoint
+    swing1: MajorSwing
+    swing2: MajorSwing
     current_price: float
+    price_change_pct: float  # Price move between swings
+    rsi_change: float        # RSI change between swings
+    candles_apart: int       # Distance between swings
     confidence: float
-    
-    @property
-    def is_bullish(self) -> bool:
-        return "bullish" in self.divergence_type.value
-    
-    @property
-    def confirmation_tf(self) -> str:
-        return TIMEFRAME_CONFIRMATION_MAP.get(self.timeframe, "1h")
-    
-    @property
-    def div_strength(self) -> str:
-        if "strong" in self.divergence_type.value:
-            return "STRONG"
-        elif "medium" in self.divergence_type.value:
-            return "MEDIUM"
-        elif "weak" in self.divergence_type.value:
-            return "WEAK"
-        return "HIDDEN"
 
 
 @dataclass
-class MSConfirmation:
-    timeframe: str
-    structure_break: StructureBreak
-    swing_high: float
-    swing_low: float
-    current_price: float
-    confirmed: bool
+class MomentumStatus:
+    rsi_confirmed: bool
+    rsi_direction: str
+    rsi_values: List[float]
+    price_confirmed: bool
+    price_direction: str
+    price_change_pct: float
 
 
 @dataclass
@@ -194,22 +150,21 @@ class AlertSignal:
     signal_tf: str
     confirm_tf: str
     divergence: DivergenceSignal
-    ms_confirmation: Optional[MSConfirmation]
+    ms_confirmation: Optional[dict]
     signal_strength: SignalStrength
     momentum: MomentumStatus
     total_confidence: float
     timestamp: datetime
     volume_rank: int
     tradingview_link: str
-    candle_close_time: datetime  # When the signal candle closed
+    candle_close_time: datetime
 
 
 def get_tradingview_link(symbol: str, timeframe: str) -> str:
-    """Generate TradingView chart link"""
     tv_symbol = symbol.replace("/", "")
     tf_map = {
-        "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
-        "1h": "60", "2h": "120", "4h": "240", "1d": "D", "1w": "W", "1M": "M"
+        "1m": "1", "5m": "5", "15m": "15", "30m": "30",
+        "1h": "60", "4h": "240", "1d": "D", "1w": "W", "1M": "M"
     }
     tv_tf = tf_map.get(timeframe, "60")
     return f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}&interval={tv_tf}"
@@ -228,9 +183,7 @@ class DivergenceScanner:
         self.volume_ranks: Dict[str, int] = {}
     
     def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
-        """Fetch top coins by 24h trading volume from Binance"""
-        
-        # Cache for 5 minutes
+        """Fetch top coins by 24h trading volume"""
         if (self.symbols_cache_time and 
             (datetime.now() - self.symbols_cache_time).total_seconds() < 300 and
             self.symbols_cache):
@@ -253,11 +206,7 @@ class DivergenceScanner:
                 
                 quote_volume = ticker.get('quoteVolume', 0) or 0
                 if quote_volume > 0:
-                    usdt_pairs.append({
-                        'symbol': symbol,
-                        'volume': quote_volume,
-                        'price': ticker.get('last', 0)
-                    })
+                    usdt_pairs.append({'symbol': symbol, 'volume': quote_volume})
             
             usdt_pairs.sort(key=lambda x: x['volume'], reverse=True)
             top_symbols = [p['symbol'] for p in usdt_pairs[:count]]
@@ -266,419 +215,359 @@ class DivergenceScanner:
             self.symbols_cache = top_symbols
             self.symbols_cache_time = datetime.now()
             
-            print(f"[{format_sl_time()}] Loaded {len(top_symbols)} coins. Top 5: {top_symbols[:5]}")
+            print(f"[{format_sl_time()}] Loaded {len(top_symbols)} coins")
             return top_symbols
             
         except Exception as e:
-            print(f"[{format_sl_time()}] Error fetching top coins: {e}")
+            print(f"[{format_sl_time()}] Error fetching coins: {e}")
             if self.symbols_cache:
                 return self.symbols_cache
-            return [
-                "BTC/USDT", "ETH/USDT", "XRP/USDT", "SOL/USDT", "BNB/USDT",
-                "DOGE/USDT", "ADA/USDT", "TRX/USDT", "AVAX/USDT", "LINK/USDT",
-                "XLM/USDT", "SHIB/USDT", "DOT/USDT", "HBAR/USDT", "SUI/USDT",
-                "BCH/USDT", "LTC/USDT", "UNI/USDT", "PEPE/USDT", "NEAR/USDT",
-                "APT/USDT", "ICP/USDT", "ETC/USDT", "AAVE/USDT", "POL/USDT",
-                "FIL/USDT", "ARB/USDT", "OP/USDT", "ATOM/USDT", "INJ/USDT",
-                "RENDER/USDT", "FET/USDT", "IMX/USDT", "WIF/USDT", "BONK/USDT",
-                "STX/USDT", "TAO/USDT", "SEI/USDT", "SAND/USDT", "MANA/USDT",
-                "GALA/USDT", "AXS/USDT", "FTM/USDT", "ALGO/USDT", "THETA/USDT",
-                "XTZ/USDT", "VET/USDT", "EGLD/USDT", "FLOW/USDT", "NEO/USDT"
-            ]
+            return ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
     
     def get_symbols_to_scan(self) -> List[str]:
         if SYMBOLS and len(SYMBOLS) > 0:
             return SYMBOLS
         return self.fetch_top_coins_by_volume(TOP_COINS_COUNT)
     
-    def _get_cooldown_key(self, symbol: str, timeframe: str, strength: SignalStrength) -> str:
-        return f"{symbol}_{timeframe}_{strength.value}"
-    
-    def _is_on_cooldown(self, symbol: str, timeframe: str, strength: SignalStrength) -> bool:
-        key = self._get_cooldown_key(symbol, timeframe, strength)
-        if key in self.last_alerts:
-            elapsed = (datetime.now() - self.last_alerts[key]).total_seconds()
-            cooldown = ALERT_COOLDOWN if strength == SignalStrength.STRONG else ALERT_COOLDOWN // 2
-            return elapsed < cooldown
-        return False
-    
-    def _set_cooldown(self, symbol: str, timeframe: str, strength: SignalStrength):
-        key = self._get_cooldown_key(symbol, timeframe, strength)
-        self.last_alerts[key] = datetime.now()
-    
-    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> Optional[pd.DataFrame]:
-        """
-        Fetch OHLCV data and calculate TradingView-style RSI
-        Returns DataFrame with CLOSED candles only (excludes current forming candle)
-        """
+    def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = None) -> Optional[pd.DataFrame]:
+        """Fetch OHLCV data - uses LOOKBACK_CANDLES from config"""
         try:
-            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            fetch_limit = limit or LOOKBACK_CANDLES + 20
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=fetch_limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # IMPORTANT: Remove the last candle as it's still forming (not closed)
-            # We only want to analyze CLOSED candles
+            # Remove last candle (still forming)
             if len(df) > 1:
                 df = df.iloc[:-1].copy()
             
-            # Calculate RSI using TradingView method
             df['rsi'] = calculate_rsi_tradingview(df['close'], RSI_PERIOD)
-            
             return df
         except Exception as e:
             print(f"Error fetching {symbol} {timeframe}: {e}")
             return None
     
-    def find_swing_highs(self, df: pd.DataFrame, bars: int = None) -> List[SwingPoint]:
-        """Find swing highs using CLOSE prices (not high prices) for consistency"""
-        swing_highs = []
-        n = bars or SWING_DETECTION_BARS
+    def find_major_swing_highs(self, df: pd.DataFrame) -> List[MajorSwing]:
+        """
+        Find MAJOR swing highs only - not every small peak
+        
+        Requirements:
+        1. Must be highest in SWING_STRENGTH_BARS candles on each side
+        2. Must be significant (MIN_PRICE_MOVE_PCT from surrounding)
+        """
+        swings = []
+        n = SWING_STRENGTH_BARS
         
         for i in range(n, len(df) - n):
-            # Use close prices for swing detection (more reliable)
-            window_closes = df['close'].iloc[i-n:i+n+1]
-            current_close = df['close'].iloc[i]
-            
-            # Also check if high is the highest in the window
-            window_highs = df['high'].iloc[i-n:i+n+1]
             current_high = df['high'].iloc[i]
-            
-            # Swing high: current close is highest close AND current high is highest high
-            if current_close == window_closes.max() and current_high == window_highs.max():
-                rsi_val = df['rsi'].iloc[i]
-                swing_highs.append(SwingPoint(
-                    index=i,
-                    price=current_close,  # Use close price
-                    rsi=rsi_val if pd.notna(rsi_val) else 50,
-                    is_high=True,
-                    timestamp=df['timestamp'].iloc[i]
-                ))
-        
-        return swing_highs[-10:] if len(swing_highs) > 10 else swing_highs
-    
-    def find_swing_lows(self, df: pd.DataFrame, bars: int = None) -> List[SwingPoint]:
-        """Find swing lows using CLOSE prices (not low prices) for consistency"""
-        swing_lows = []
-        n = bars or SWING_DETECTION_BARS
-        
-        for i in range(n, len(df) - n):
-            # Use close prices for swing detection
-            window_closes = df['close'].iloc[i-n:i+n+1]
             current_close = df['close'].iloc[i]
             
-            # Also check if low is the lowest in the window
-            window_lows = df['low'].iloc[i-n:i+n+1]
-            current_low = df['low'].iloc[i]
+            # Check if highest in window
+            window_highs = df['high'].iloc[i-n:i+n+1]
+            if current_high != window_highs.max():
+                continue
             
-            # Swing low: current close is lowest close AND current low is lowest low
-            if current_close == window_closes.min() and current_low == window_lows.min():
-                rsi_val = df['rsi'].iloc[i]
-                swing_lows.append(SwingPoint(
-                    index=i,
-                    price=current_close,  # Use close price
-                    rsi=rsi_val if pd.notna(rsi_val) else 50,
-                    is_high=False,
-                    timestamp=df['timestamp'].iloc[i]
-                ))
-        
-        return swing_lows[-10:] if len(swing_lows) > 10 else swing_lows
-    
-    def check_momentum_on_closed_candles(self, df: pd.DataFrame, is_bullish: bool) -> MomentumStatus:
-        """
-        Check RSI and Price momentum on last 2-3 CLOSED candles
-        
-        For Bullish:
-          - RSI should be rising (RSI[-1] > RSI[-2] > RSI[-3])
-          - Price (close) should be rising
-        
-        For Bearish:
-          - RSI should be falling (RSI[-1] < RSI[-2] < RSI[-3])
-          - Price (close) should be falling
-        """
-        if len(df) < 3:
-            return MomentumStatus(False, "Neutral", [], False, "Neutral", [], 0.0)
-        
-        # Get last 3 CLOSED candle RSI values
-        rsi_values = []
-        for i in range(-3, 0):
+            # Calculate swing strength (% above surrounding lows)
+            surrounding_lows = df['low'].iloc[i-n:i+n+1].min()
+            swing_strength = ((current_high - surrounding_lows) / surrounding_lows) * 100
+            
+            # Must be significant move
+            if swing_strength < MIN_PRICE_MOVE_PCT:
+                continue
+            
             rsi_val = df['rsi'].iloc[i]
-            if pd.notna(rsi_val):
-                rsi_values.append(round(rsi_val, 2))
+            if pd.isna(rsi_val):
+                continue
+            
+            swings.append(MajorSwing(
+                index=i,
+                price=current_close,
+                rsi=rsi_val,
+                is_high=True,
+                timestamp=df['timestamp'].iloc[i],
+                strength=swing_strength
+            ))
         
-        # Get last 3 CLOSED candle close prices
-        price_values = [round(df['close'].iloc[i], 8) for i in range(-3, 0)]
+        return swings
+    
+    def find_major_swing_lows(self, df: pd.DataFrame) -> List[MajorSwing]:
+        """
+        Find MAJOR swing lows only - not every small dip
+        """
+        swings = []
+        n = SWING_STRENGTH_BARS
         
-        # Check RSI direction on closed candles
+        for i in range(n, len(df) - n):
+            current_low = df['low'].iloc[i]
+            current_close = df['close'].iloc[i]
+            
+            # Check if lowest in window
+            window_lows = df['low'].iloc[i-n:i+n+1]
+            if current_low != window_lows.min():
+                continue
+            
+            # Calculate swing strength (% below surrounding highs)
+            surrounding_highs = df['high'].iloc[i-n:i+n+1].max()
+            swing_strength = ((surrounding_highs - current_low) / current_low) * 100
+            
+            # Must be significant move
+            if swing_strength < MIN_PRICE_MOVE_PCT:
+                continue
+            
+            rsi_val = df['rsi'].iloc[i]
+            if pd.isna(rsi_val):
+                continue
+            
+            swings.append(MajorSwing(
+                index=i,
+                price=current_close,
+                rsi=rsi_val,
+                is_high=False,
+                timestamp=df['timestamp'].iloc[i],
+                strength=swing_strength
+            ))
+        
+        return swings
+    
+    def filter_significant_swings(self, swings: List[MajorSwing], current_idx: int) -> List[MajorSwing]:
+        """
+        Filter swings to keep only significant ones that are:
+        1. Within lookback range from current candle
+        2. At least MIN_SWING_DISTANCE candles apart from each other
+        """
+        if not swings:
+            return []
+        
+        # Only consider swings within lookback range and before current
+        valid_swings = [s for s in swings if current_idx - LOOKBACK_CANDLES <= s.index < current_idx - 2]
+        
+        if len(valid_swings) < 2:
+            return valid_swings
+        
+        # Sort by index (oldest first)
+        valid_swings.sort(key=lambda x: x.index)
+        
+        # Keep only swings that are MIN_SWING_DISTANCE apart
+        filtered = [valid_swings[0]]
+        for swing in valid_swings[1:]:
+            if swing.index - filtered[-1].index >= MIN_SWING_DISTANCE:
+                filtered.append(swing)
+        
+        # Return last 2-3 major swings only
+        return filtered[-3:] if len(filtered) > 3 else filtered
+    
+    def detect_divergence(self, df: pd.DataFrame, idx: int, 
+                          swing_lows: List[MajorSwing], 
+                          swing_highs: List[MajorSwing],
+                          symbol: str, timeframe: str) -> Optional[DivergenceSignal]:
+        """
+        Detect divergence using MAJOR swings only
+        
+        Bullish Regular: Price makes Lower Low, RSI makes Higher Low
+        Bullish Hidden: Price makes Higher Low, RSI makes Lower Low
+        Bearish Regular: Price makes Higher High, RSI makes Lower High
+        Bearish Hidden: Price makes Lower High, RSI makes Higher High
+        """
+        current_price = df['close'].iloc[idx]
+        
+        # Check for BULLISH divergence (looking at lows)
+        valid_lows = self.filter_significant_swings(swing_lows, idx)
+        if len(valid_lows) >= 2:
+            swing1, swing2 = valid_lows[-2], valid_lows[-1]
+            
+            price_pct = ((swing2.price - swing1.price) / swing1.price) * 100
+            rsi_change = swing2.rsi - swing1.rsi
+            candles_apart = swing2.index - swing1.index
+            
+            div_type = None
+            confidence = 0.0
+            
+            # Bullish Regular: Price LL, RSI HL
+            if swing2.price < swing1.price and swing2.rsi > swing1.rsi:
+                div_type = DivergenceType.BULLISH_REGULAR
+                # Higher confidence for bigger divergence
+                confidence = min(0.9, 0.6 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
+            
+            # Bullish Hidden: Price HL, RSI LL
+            elif swing2.price > swing1.price and swing2.rsi < swing1.rsi:
+                div_type = DivergenceType.BULLISH_HIDDEN
+                confidence = min(0.85, 0.55 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
+            
+            if div_type:
+                return DivergenceSignal(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    divergence_type=div_type,
+                    swing1=swing1,
+                    swing2=swing2,
+                    current_price=current_price,
+                    price_change_pct=price_pct,
+                    rsi_change=rsi_change,
+                    candles_apart=candles_apart,
+                    confidence=confidence
+                )
+        
+        # Check for BEARISH divergence (looking at highs)
+        valid_highs = self.filter_significant_swings(swing_highs, idx)
+        if len(valid_highs) >= 2:
+            swing1, swing2 = valid_highs[-2], valid_highs[-1]
+            
+            price_pct = ((swing2.price - swing1.price) / swing1.price) * 100
+            rsi_change = swing2.rsi - swing1.rsi
+            candles_apart = swing2.index - swing1.index
+            
+            div_type = None
+            confidence = 0.0
+            
+            # Bearish Regular: Price HH, RSI LH
+            if swing2.price > swing1.price and swing2.rsi < swing1.rsi:
+                div_type = DivergenceType.BEARISH_REGULAR
+                confidence = min(0.9, 0.6 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
+            
+            # Bearish Hidden: Price LH, RSI HH
+            elif swing2.price < swing1.price and swing2.rsi > swing1.rsi:
+                div_type = DivergenceType.BEARISH_HIDDEN
+                confidence = min(0.85, 0.55 + abs(price_pct) * 0.02 + abs(rsi_change) * 0.01)
+            
+            if div_type:
+                return DivergenceSignal(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    divergence_type=div_type,
+                    swing1=swing1,
+                    swing2=swing2,
+                    current_price=current_price,
+                    price_change_pct=price_pct,
+                    rsi_change=rsi_change,
+                    candles_apart=candles_apart,
+                    confidence=confidence
+                )
+        
+        return None
+    
+    def check_momentum(self, df: pd.DataFrame, is_bullish: bool) -> MomentumStatus:
+        """Check RSI and Price momentum on last 2 closed candles"""
+        if len(df) < 3:
+            return MomentumStatus(False, "Neutral", [], False, "Neutral", 0.0)
+        
+        # Get last 2 closed candles
+        rsi_values = [df['rsi'].iloc[-2], df['rsi'].iloc[-1]]
+        rsi_values = [r for r in rsi_values if pd.notna(r)]
+        
+        price_values = [df['close'].iloc[-2], df['close'].iloc[-1]]
+        price_change_pct = ((price_values[-1] - price_values[-2]) / price_values[-2]) * 100
+        
         rsi_confirmed = False
         rsi_direction = "Neutral"
         
         if len(rsi_values) >= 2:
-            # Compare last 2 closed candles
             if rsi_values[-1] > rsi_values[-2]:
-                rsi_direction = "Rising"
+                rsi_direction = "Rising ↗️"
                 if is_bullish:
                     rsi_confirmed = True
             elif rsi_values[-1] < rsi_values[-2]:
-                rsi_direction = "Falling"
+                rsi_direction = "Falling ↘️"
                 if not is_bullish:
                     rsi_confirmed = True
-            
-            # Stronger confirmation: 3 consecutive candles
-            if len(rsi_values) >= 3:
-                if rsi_values[-1] > rsi_values[-2] > rsi_values[-3]:
-                    rsi_direction = "Rising ↗️↗️"
-                    if is_bullish:
-                        rsi_confirmed = True
-                elif rsi_values[-1] < rsi_values[-2] < rsi_values[-3]:
-                    rsi_direction = "Falling ↘️↘️"
-                    if not is_bullish:
-                        rsi_confirmed = True
         
-        # Check Price direction on closed candles
         price_confirmed = False
         price_direction = "Neutral"
-        price_change_pct = 0.0
         
-        if len(price_values) >= 2:
-            # Calculate % change between last 2 closed candles
-            price_change_pct = ((price_values[-1] - price_values[-2]) / price_values[-2]) * 100
-            
-            if price_values[-1] > price_values[-2]:
-                price_direction = "Rising"
-                if is_bullish:
-                    price_confirmed = True
-            elif price_values[-1] < price_values[-2]:
-                price_direction = "Falling"
-                if not is_bullish:
-                    price_confirmed = True
-            
-            # Stronger confirmation: 3 consecutive candles
-            if len(price_values) >= 3:
-                if price_values[-1] > price_values[-2] > price_values[-3]:
-                    price_direction = "Rising ↗️↗️"
-                    if is_bullish:
-                        price_confirmed = True
-                elif price_values[-1] < price_values[-2] < price_values[-3]:
-                    price_direction = "Falling ↘️↘️"
-                    if not is_bullish:
-                        price_confirmed = True
+        if price_values[-1] > price_values[-2]:
+            price_direction = "Rising ↗️"
+            if is_bullish:
+                price_confirmed = True
+        elif price_values[-1] < price_values[-2]:
+            price_direction = "Falling ↘️"
+            if not is_bullish:
+                price_confirmed = True
         
         return MomentumStatus(
             rsi_confirmed=rsi_confirmed,
             rsi_direction=rsi_direction,
-            rsi_values=rsi_values,
+            rsi_values=[round(r, 1) for r in rsi_values],
             price_confirmed=price_confirmed,
             price_direction=price_direction,
-            price_values=price_values,
-            price_change_pct=round(price_change_pct, 4)
-        )
-    
-    def detect_bullish_divergence(self, df: pd.DataFrame, swing_lows: List[SwingPoint], 
-                                   current_price: float, symbol: str, timeframe: str) -> Optional[DivergenceSignal]:
-        if len(swing_lows) < 2:
-            return None
-        
-        point1, point2 = swing_lows[-2], swing_lows[-1]
-        if pd.isna(point1.rsi) or pd.isna(point2.rsi):
-            return None
-        
-        price_pct = ((point2.price - point1.price) / point1.price) * 100
-        rsi_change = point2.rsi - point1.rsi
-        
-        divergence_type, confidence = None, 0.0
-        
-        # Strong: Price Lower Low, RSI Higher Low
-        if point2.price < point1.price and point2.rsi > point1.rsi:
-            if abs(price_pct) > PRICE_TOLERANCE_PERCENT:
-                divergence_type, confidence = DivergenceType.STRONG_BULLISH, 0.85
-        
-        # Medium: Price Equal (Double Bottom), RSI Higher Low
-        elif abs(price_pct) <= PRICE_TOLERANCE_PERCENT and point2.rsi > point1.rsi:
-            divergence_type, confidence = DivergenceType.MEDIUM_BULLISH, 0.75
-        
-        # Weak: Price Lower Low, RSI Equal
-        elif point2.price < point1.price and abs(rsi_change) <= RSI_TOLERANCE:
-            divergence_type, confidence = DivergenceType.WEAK_BULLISH, 0.60
-        
-        # Hidden: Price Higher Low, RSI Lower Low (trend continuation)
-        elif point2.price > point1.price and point2.rsi < point1.rsi:
-            divergence_type, confidence = DivergenceType.HIDDEN_BULLISH, 0.70
-        
-        if divergence_type:
-            return DivergenceSignal(symbol, timeframe, divergence_type, point1, point2, current_price, confidence)
-        return None
-    
-    def detect_bearish_divergence(self, df: pd.DataFrame, swing_highs: List[SwingPoint], 
-                                   current_price: float, symbol: str, timeframe: str) -> Optional[DivergenceSignal]:
-        if len(swing_highs) < 2:
-            return None
-        
-        point1, point2 = swing_highs[-2], swing_highs[-1]
-        if pd.isna(point1.rsi) or pd.isna(point2.rsi):
-            return None
-        
-        price_pct = ((point2.price - point1.price) / point1.price) * 100
-        rsi_change = point2.rsi - point1.rsi
-        
-        divergence_type, confidence = None, 0.0
-        
-        # Strong: Price Higher High, RSI Lower High
-        if point2.price > point1.price and point2.rsi < point1.rsi:
-            if abs(price_pct) > PRICE_TOLERANCE_PERCENT:
-                divergence_type, confidence = DivergenceType.STRONG_BEARISH, 0.85
-        
-        # Medium: Price Equal (Double Top), RSI Lower High
-        elif abs(price_pct) <= PRICE_TOLERANCE_PERCENT and point2.rsi < point1.rsi:
-            divergence_type, confidence = DivergenceType.MEDIUM_BEARISH, 0.75
-        
-        # Weak: Price Higher High, RSI Equal
-        elif point2.price > point1.price and abs(rsi_change) <= RSI_TOLERANCE:
-            divergence_type, confidence = DivergenceType.WEAK_BEARISH, 0.60
-        
-        # Hidden: Price Lower High, RSI Higher High (trend continuation)
-        elif point2.price < point1.price and point2.rsi > point1.rsi:
-            divergence_type, confidence = DivergenceType.HIDDEN_BEARISH, 0.70
-        
-        if divergence_type:
-            return DivergenceSignal(symbol, timeframe, divergence_type, point1, point2, current_price, confidence)
-        return None
-    
-    def check_ms_confirmation(self, symbol: str, confirmation_tf: str, is_bullish: bool) -> Optional[MSConfirmation]:
-        df = self.fetch_ohlcv(symbol, confirmation_tf, limit=50)
-        if df is None or len(df) < 20:
-            return None
-        
-        swing_highs = self.find_swing_highs(df, bars=3)
-        swing_lows = self.find_swing_lows(df, bars=3)
-        
-        if len(swing_highs) < 2 or len(swing_lows) < 2:
-            return None
-        
-        # Use last CLOSED candle close price
-        current_close = df['close'].iloc[-1]
-        recent_high, prev_high = swing_highs[-1].price, swing_highs[-2].price
-        recent_low, prev_low = swing_lows[-1].price, swing_lows[-2].price
-        
-        structure_break = StructureBreak.NONE
-        
-        if is_bullish:
-            if current_close > recent_high:
-                if recent_high > prev_high:
-                    structure_break = StructureBreak.BULLISH_BOS
-                else:
-                    structure_break = StructureBreak.BULLISH_CHOCH
-        else:
-            if current_close < recent_low:
-                if recent_low < prev_low:
-                    structure_break = StructureBreak.BEARISH_BOS
-                else:
-                    structure_break = StructureBreak.BEARISH_CHOCH
-        
-        return MSConfirmation(
-            confirmation_tf, structure_break, recent_high, recent_low, 
-            current_close, structure_break != StructureBreak.NONE
+            price_change_pct=round(price_change_pct, 2)
         )
     
     def determine_signal_strength(self, divergence: DivergenceSignal, 
-                                   ms_confirmed: bool, momentum: MomentumStatus) -> Tuple[SignalStrength, float]:
+                                   momentum: MomentumStatus) -> Tuple[SignalStrength, float]:
         """
-        🟢 STRONG: Divergence + MS + (RSI or Price momentum)
-        🟡 MEDIUM: Divergence + (RSI or Price momentum), no MS
-        🔴 EARLY: Divergence only, no confirmations yet
+        🟢 STRONG: Divergence + RSI momentum + Price momentum
+        🟡 MEDIUM: Divergence + (RSI OR Price) momentum  
+        🔴 EARLY: Divergence only
         """
         base_confidence = divergence.confidence
         
-        confirmations = 0
-        if ms_confirmed:
-            confirmations += 1
-            base_confidence += 0.10
-        if momentum.rsi_confirmed:
-            confirmations += 1
-            base_confidence += 0.05
-        if momentum.price_confirmed:
-            confirmations += 1
-            base_confidence += 0.05
-        
-        if ms_confirmed and (momentum.rsi_confirmed or momentum.price_confirmed):
-            return SignalStrength.STRONG, min(base_confidence, 0.95)
+        if momentum.rsi_confirmed and momentum.price_confirmed:
+            return SignalStrength.STRONG, min(base_confidence + 0.10, 0.95)
         elif momentum.rsi_confirmed or momentum.price_confirmed:
-            return SignalStrength.MEDIUM, min(base_confidence, 0.85)
+            return SignalStrength.MEDIUM, min(base_confidence + 0.05, 0.85)
         else:
             return SignalStrength.EARLY, min(base_confidence, 0.70)
     
+    def _get_cooldown_key(self, symbol: str, timeframe: str) -> str:
+        return f"{symbol}_{timeframe}"
+    
+    def _is_on_cooldown(self, symbol: str, timeframe: str) -> bool:
+        key = self._get_cooldown_key(symbol, timeframe)
+        if key in self.last_alerts:
+            elapsed = (datetime.now() - self.last_alerts[key]).total_seconds()
+            return elapsed < ALERT_COOLDOWN
+        return False
+    
+    def _set_cooldown(self, symbol: str, timeframe: str):
+        key = self._get_cooldown_key(symbol, timeframe)
+        self.last_alerts[key] = datetime.now()
+    
     def scan_symbol(self, symbol: str, timeframe: str) -> List[AlertSignal]:
-        """Scan a single symbol and return all signal levels"""
+        """Scan a single symbol for divergences"""
         alerts = []
         
-        df = self.fetch_ohlcv(symbol, timeframe)
-        if df is None or len(df) < RSI_LOOKBACK_CANDLES:
+        if self._is_on_cooldown(symbol, timeframe):
             return alerts
         
-        # Current price is from the last CLOSED candle
-        current_price = df['close'].iloc[-1]
-        candle_close_time = df['timestamp'].iloc[-1]
+        df = self.fetch_ohlcv(symbol, timeframe)
+        if df is None or len(df) < LOOKBACK_CANDLES:
+            return alerts
         
-        swing_highs = self.find_swing_highs(df)
-        swing_lows = self.find_swing_lows(df)
+        # Find ALL major swings in the data
+        swing_highs = self.find_major_swing_highs(df)
+        swing_lows = self.find_major_swing_lows(df)
+        
+        # Current candle index (last closed candle)
+        idx = len(df) - 1
+        current_price = df['close'].iloc[idx]
+        candle_close_time = df['timestamp'].iloc[idx]
         volume_rank = self.volume_ranks.get(symbol, 999)
         
-        # Check for bullish divergence
-        bullish_div = self.detect_bullish_divergence(df, swing_lows, current_price, symbol, timeframe)
-        if bullish_div:
-            momentum = self.check_momentum_on_closed_candles(df, is_bullish=True)
-            ms_conf = self.check_ms_confirmation(symbol, bullish_div.confirmation_tf, True)
-            ms_confirmed = ms_conf and ms_conf.confirmed
-            
-            signal_strength, confidence = self.determine_signal_strength(
-                bullish_div, ms_confirmed, momentum
-            )
-            
-            if not self._is_on_cooldown(symbol, timeframe, signal_strength):
-                self._set_cooldown(symbol, timeframe, signal_strength)
-                
-                alerts.append(AlertSignal(
-                    symbol=symbol,
-                    signal_tf=timeframe,
-                    confirm_tf=bullish_div.confirmation_tf,
-                    divergence=bullish_div,
-                    ms_confirmation=ms_conf,
-                    signal_strength=signal_strength,
-                    momentum=momentum,
-                    total_confidence=confidence,
-                    timestamp=get_sl_time(),
-                    volume_rank=volume_rank,
-                    tradingview_link=get_tradingview_link(symbol, timeframe),
-                    candle_close_time=candle_close_time
-                ))
+        # Detect divergence
+        divergence = self.detect_divergence(df, idx, swing_lows, swing_highs, symbol, timeframe)
         
-        # Check for bearish divergence
-        bearish_div = self.detect_bearish_divergence(df, swing_highs, current_price, symbol, timeframe)
-        if bearish_div:
-            momentum = self.check_momentum_on_closed_candles(df, is_bullish=False)
-            ms_conf = self.check_ms_confirmation(symbol, bearish_div.confirmation_tf, False)
-            ms_confirmed = ms_conf and ms_conf.confirmed
+        if divergence:
+            is_bullish = "BULLISH" in divergence.divergence_type.value.upper()
+            momentum = self.check_momentum(df, is_bullish)
+            signal_strength, confidence = self.determine_signal_strength(divergence, momentum)
             
-            signal_strength, confidence = self.determine_signal_strength(
-                bearish_div, ms_confirmed, momentum
-            )
+            confirm_tf = TIMEFRAME_CONFIRMATION_MAP.get(timeframe, "1h")
             
-            if not self._is_on_cooldown(symbol, timeframe, signal_strength):
-                self._set_cooldown(symbol, timeframe, signal_strength)
-                
-                alerts.append(AlertSignal(
-                    symbol=symbol,
-                    signal_tf=timeframe,
-                    confirm_tf=bearish_div.confirmation_tf,
-                    divergence=bearish_div,
-                    ms_confirmation=ms_conf,
-                    signal_strength=signal_strength,
-                    momentum=momentum,
-                    total_confidence=confidence,
-                    timestamp=get_sl_time(),
-                    volume_rank=volume_rank,
-                    tradingview_link=get_tradingview_link(symbol, timeframe),
-                    candle_close_time=candle_close_time
-                ))
+            self._set_cooldown(symbol, timeframe)
+            
+            alerts.append(AlertSignal(
+                symbol=symbol,
+                signal_tf=timeframe,
+                confirm_tf=confirm_tf,
+                divergence=divergence,
+                ms_confirmation=None,
+                signal_strength=signal_strength,
+                momentum=momentum,
+                total_confidence=confidence,
+                timestamp=get_sl_time(),
+                volume_rank=volume_rank,
+                tradingview_link=get_tradingview_link(symbol, timeframe),
+                candle_close_time=candle_close_time
+            ))
         
         return alerts
     
@@ -687,7 +576,8 @@ class DivergenceScanner:
         all_alerts = []
         symbols = self.get_symbols_to_scan()
         
-        print(f"[{format_sl_time()}] Scanning {len(symbols)} coins across {len(SCAN_TIMEFRAMES)} timeframes...")
+        print(f"[{format_sl_time()}] Scanning {len(symbols)} coins × {len(SCAN_TIMEFRAMES)} timeframes...")
+        print(f"[{format_sl_time()}] Settings: Lookback={LOOKBACK_CANDLES}, MinDistance={MIN_SWING_DISTANCE}, MinMove={MIN_PRICE_MOVE_PCT}%")
         
         for symbol in symbols:
             for timeframe in SCAN_TIMEFRAMES:
@@ -703,12 +593,13 @@ class DivergenceScanner:
                     
                     for alert in alerts:
                         emoji = "🟢" if alert.signal_strength == SignalStrength.STRONG else "🟡" if alert.signal_strength == SignalStrength.MEDIUM else "🔴"
-                        print(f"[{format_sl_time()}] {emoji} {alert.signal_strength.value.upper()}: {symbol} {timeframe}")
+                        print(f"[{format_sl_time()}] {emoji} {alert.signal_strength.value.upper()}: {symbol} {timeframe} | Swings {alert.divergence.candles_apart} candles apart")
                     
-                    time.sleep(0.3)
+                    time.sleep(0.2)
                 except Exception as e:
                     print(f"Error scanning {symbol} {timeframe}: {e}")
         
+        # Sort by strength then confidence
         strength_order = {SignalStrength.STRONG: 3, SignalStrength.MEDIUM: 2, SignalStrength.EARLY: 1}
         all_alerts.sort(key=lambda x: (strength_order.get(x.signal_strength, 0), x.total_confidence), reverse=True)
         
@@ -718,25 +609,17 @@ class DivergenceScanner:
 
 class AlertFormatter:
     DIV_NAMES = {
-        DivergenceType.STRONG_BULLISH: "Strong Bullish",
-        DivergenceType.MEDIUM_BULLISH: "Medium Bullish",
-        DivergenceType.WEAK_BULLISH: "Weak Bullish",
-        DivergenceType.HIDDEN_BULLISH: "Hidden Bullish",
-        DivergenceType.STRONG_BEARISH: "Strong Bearish",
-        DivergenceType.MEDIUM_BEARISH: "Medium Bearish",
-        DivergenceType.WEAK_BEARISH: "Weak Bearish",
-        DivergenceType.HIDDEN_BEARISH: "Hidden Bearish",
+        DivergenceType.BULLISH_REGULAR: "📈 Bullish Regular",
+        DivergenceType.BULLISH_HIDDEN: "📈 Bullish Hidden",
+        DivergenceType.BEARISH_REGULAR: "📉 Bearish Regular",
+        DivergenceType.BEARISH_HIDDEN: "📉 Bearish Hidden",
     }
     
     DIV_DESC = {
-        DivergenceType.STRONG_BULLISH: "Price: LL | RSI: HL",
-        DivergenceType.MEDIUM_BULLISH: "Price: DB | RSI: HL",
-        DivergenceType.WEAK_BULLISH: "Price: LL | RSI: DB",
-        DivergenceType.HIDDEN_BULLISH: "Price: HL | RSI: LL",
-        DivergenceType.STRONG_BEARISH: "Price: HH | RSI: LH",
-        DivergenceType.MEDIUM_BEARISH: "Price: DT | RSI: LH",
-        DivergenceType.WEAK_BEARISH: "Price: HH | RSI: DT",
-        DivergenceType.HIDDEN_BEARISH: "Price: LH | RSI: HH",
+        DivergenceType.BULLISH_REGULAR: "Price: Lower Low | RSI: Higher Low",
+        DivergenceType.BULLISH_HIDDEN: "Price: Higher Low | RSI: Lower Low",
+        DivergenceType.BEARISH_REGULAR: "Price: Higher High | RSI: Lower High",
+        DivergenceType.BEARISH_HIDDEN: "Price: Lower High | RSI: Higher High",
     }
     
     @staticmethod
@@ -752,84 +635,78 @@ class AlertFormatter:
     
     @classmethod
     def format_alert(cls, signal: AlertSignal) -> str:
-        is_bull = signal.divergence.is_bullish
+        is_bull = "BULLISH" in signal.divergence.divergence_type.value.upper()
         
-        # Signal strength emoji and label
+        # Signal strength
         if signal.signal_strength == SignalStrength.STRONG:
             strength_emoji = "🟢"
-            strength_label = "STRONG SIGNAL"
+            strength_label = "STRONG"
         elif signal.signal_strength == SignalStrength.MEDIUM:
             strength_emoji = "🟡"
-            strength_label = "MEDIUM SIGNAL"
+            strength_label = "MEDIUM"
         else:
             strength_emoji = "🔴"
-            strength_label = "EARLY SIGNAL"
+            strength_label = "EARLY"
         
-        direction = "BULLISH" if is_bull else "BEARISH"
+        direction = "BULLISH 📈" if is_bull else "BEARISH 📉"
         trade = "LONG" if is_bull else "SHORT"
         
-        # Calculate trade levels
+        # Trade levels
+        entry = signal.divergence.current_price
         if is_bull:
-            stop = signal.ms_confirmation.swing_low * 0.995 if signal.ms_confirmation else signal.divergence.point2.price * 0.98
-            target = signal.ms_confirmation.swing_high * 1.02 if signal.ms_confirmation else signal.divergence.current_price * 1.04
+            stop = min(signal.divergence.swing1.price, signal.divergence.swing2.price) * 0.99
+            target = entry * 1.04
         else:
-            stop = signal.ms_confirmation.swing_high * 1.005 if signal.ms_confirmation else signal.divergence.point2.price * 1.02
-            target = signal.ms_confirmation.swing_low * 0.98 if signal.ms_confirmation else signal.divergence.current_price * 0.96
+            stop = max(signal.divergence.swing1.price, signal.divergence.swing2.price) * 1.01
+            target = entry * 0.96
         
-        # MS Confirmation status
-        if signal.ms_confirmation and signal.ms_confirmation.confirmed:
-            ms_status = f"✅ {signal.ms_confirmation.structure_break.value}"
-        else:
-            ms_status = "⏳ Waiting..."
-        
-        # RSI momentum
+        # Momentum
         rsi_emoji = "✅" if signal.momentum.rsi_confirmed else "⏳"
-        rsi_vals = " → ".join([str(round(r, 1)) for r in signal.momentum.rsi_values])
-        
-        # Price momentum
         price_emoji = "✅" if signal.momentum.price_confirmed else "⏳"
-        price_change = f"{signal.momentum.price_change_pct:+.2f}%"
         
-        # Format candle close time in Sri Lanka time
+        # Format candle time
         candle_time = signal.candle_close_time
         if candle_time.tzinfo is None:
             candle_time = pytz.utc.localize(candle_time).astimezone(SL_TZ)
-        else:
-            candle_time = candle_time.astimezone(SL_TZ)
         candle_time_str = candle_time.strftime('%Y-%m-%d %H:%M IST')
         
-        return f"""{strength_emoji} {strength_label} - {direction}
+        div = signal.divergence
+        
+        return f"""{strength_emoji} {strength_label} SIGNAL - {direction}
 
 📊 {signal.symbol} (Vol Rank #{signal.volume_rank})
-⏰ Signal: {signal.signal_tf.upper()} | Confirm: {signal.confirm_tf.upper()}
+⏰ Timeframe: {signal.signal_tf.upper()}
 🕐 Candle Close: {candle_time_str}
 
-━━━━━━━━━━━━━━━━━━━━
-📈 DIVERGENCE
-━━━━━━━━━━━━━━━━━━━━
-Type: {cls.DIV_NAMES[signal.divergence.divergence_type]}
-Pattern: {cls.DIV_DESC[signal.divergence.divergence_type]}
+{'━'*30}
+📈 DIVERGENCE DETECTED
+{'━'*30}
+{cls.DIV_NAMES[div.divergence_type]}
+{cls.DIV_DESC[div.divergence_type]}
 
-Point 1: {cls.fmt_price(signal.divergence.point1.price)} (RSI: {signal.divergence.point1.rsi:.1f})
-Point 2: {cls.fmt_price(signal.divergence.point2.price)} (RSI: {signal.divergence.point2.rsi:.1f})
+Swing 1: {cls.fmt_price(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
+Swing 2: {cls.fmt_price(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
 
-━━━━━━━━━━━━━━━━━━━━
-✅ CONFIRMATIONS
-━━━━━━━━━━━━━━━━━━━━
-MS ({signal.confirm_tf}): {ms_status}
-{rsi_emoji} RSI: {signal.momentum.rsi_direction} ({rsi_vals})
-{price_emoji} Price: {signal.momentum.price_direction} ({price_change})
+📏 Distance: {div.candles_apart} candles apart
+📊 Price Change: {div.price_change_pct:+.2f}%
+📉 RSI Change: {div.rsi_change:+.1f}
 
-━━━━━━━━━━━━━━━━━━━━
+{'━'*30}
+✅ MOMENTUM CHECK
+{'━'*30}
+{rsi_emoji} RSI: {signal.momentum.rsi_direction} ({' → '.join(map(str, signal.momentum.rsi_values))})
+{price_emoji} Price: {signal.momentum.price_direction} ({signal.momentum.price_change_pct:+.2f}%)
+
+{'━'*30}
 🎯 TRADE IDEA ({trade})
-━━━━━━━━━━━━━━━━━━━━
-Entry: {cls.fmt_price(signal.divergence.current_price)}
-Stop: {cls.fmt_price(stop)}
+{'━'*30}
+Entry: {cls.fmt_price(entry)}
+Stop Loss: {cls.fmt_price(stop)}
 Target: {cls.fmt_price(target)}
 
 🔥 Confidence: {signal.total_confidence * 100:.0f}%
 
-📺 TradingView: {signal.tradingview_link}
+📺 {signal.tradingview_link}
 
-⚠️ Not financial advice. DYOR!
+⚠️ DYOR - Not financial advice!
 🇱🇰 {format_sl_time(signal.timestamp)}"""
