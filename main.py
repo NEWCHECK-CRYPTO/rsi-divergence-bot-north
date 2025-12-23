@@ -60,13 +60,20 @@ def run_web_server():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = journal.get_stats()
     symbols = scanner.get_symbols_to_scan()
+    
+    try:
+        from tradingview_ta import TA_Handler
+        tv_status = "✅ TradingView-TA Active"
+    except:
+        tv_status = "⚠️ TradingView-TA Fallback"
+    
     await update.message.reply_text(
-        f"🤖 *RSI Divergence Bot V4*\n\n"
+        f"🤖 *RSI Divergence Bot V5*\n\n"
         f"📊 {len(symbols)} coins | ⏰ {', '.join(SCAN_TIMEFRAMES)}\n\n"
-        f"*Features:*\n"
-        f"📝 Trade Journal - auto-logs signals\n"
-        f"🤖 AI Analysis - performance insights\n"
-        f"📏 Proper swing detection (V4)\n\n"
+        f"*V5 Features:*\n"
+        f"📺 {tv_status}\n"
+        f"📝 Trade Journal\n"
+        f"🤖 AI Analysis\n\n"
         f"*Journal:* {stats['total']} trades | {stats['win_rate']:.0f}% WR\n\n"
         f"*Commands:*\n"
         f"/subscribe - Get alerts\n"
@@ -75,7 +82,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/close <id> win|loss - Record result\n"
         f"/analyze - AI analysis\n"
         f"/ask <question> - Ask anything\n"
-        f"/scan - Manual scan",
+        f"/scan - Manual scan\n"
+        f"/debug <symbol> <tf> - Debug scan",
         parse_mode='Markdown')
 
 
@@ -361,7 +369,7 @@ def main():
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
-    logger.info(f"🤖 Bot V4 + Journal starting...")
+    logger.info(f"🤖 Bot V5 + TradingView-TA starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
