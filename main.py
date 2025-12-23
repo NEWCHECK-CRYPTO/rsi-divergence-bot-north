@@ -245,9 +245,10 @@ async def debug_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔍 Debug scan: {symbol} {timeframe}...")
     
     try:
-        df = scanner.fetch_ohlcv(symbol, timeframe)
-        if df is None:
-            await update.message.reply_text(f"❌ Could not fetch {symbol} data")
+        # V5 uses fetch_ohlcv_with_tv_rsi
+        df = scanner.fetch_ohlcv_with_tv_rsi(symbol, timeframe)
+        if df is None or len(df) < 10:
+            await update.message.reply_text(f"❌ Could not fetch {symbol} data. Check if symbol is valid.")
             return
         
         swing_highs = scanner.find_major_swing_highs(df)
@@ -258,17 +259,27 @@ async def debug_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"📈 Swing Highs found: {len(swing_highs)}\n"
         msg += f"📉 Swing Lows found: {len(swing_lows)}\n\n"
         
+        msg += f"⚙️ *Settings:*\n"
+        msg += f"• Lookback: {LOOKBACK_CANDLES}\n"
+        msg += f"• Min Distance: {MIN_SWING_DISTANCE}\n"
+        msg += f"• Min Move: {MIN_PRICE_MOVE_PCT}%\n"
+        msg += f"• Swing Bars: {SWING_STRENGTH_BARS}\n\n"
+        
         if swing_highs:
             msg += f"*Last 3 Swing Highs:*\n"
             for sh in swing_highs[-3:]:
-                msg += f"• ${sh.price:,.2f} (RSI: {sh.rsi:.1f}) - idx {sh.index}\n"
+                msg += f"• ${sh.price:,.2f} (RSI: {sh.rsi:.1f})\n"
+        else:
+            msg += f"⚠️ No swing highs found!\n"
         
         if swing_lows:
             msg += f"\n*Last 3 Swing Lows:*\n"
             for sl in swing_lows[-3:]:
-                msg += f"• ${sl.price:,.2f} (RSI: {sl.rsi:.1f}) - idx {sl.index}\n"
+                msg += f"• ${sl.price:,.2f} (RSI: {sl.rsi:.1f})\n"
+        else:
+            msg += f"⚠️ No swing lows found!\n"
         
-        # Check if divergence would be detected
+        # Check divergence
         idx = len(df) - 1
         valid_lows = scanner.filter_significant_swings(swing_lows, idx)
         valid_highs = scanner.filter_significant_swings(swing_highs, idx)
@@ -283,14 +294,16 @@ async def debug_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rsi_change = p2.rsi - p1.rsi
             distance = p2.index - p1.index
             msg += f"\n*Bullish check:*\n"
-            msg += f"Price change: {price_pct:+.2f}%\n"
-            msg += f"RSI change: {rsi_change:+.1f}\n"
+            msg += f"Price: {price_pct:+.2f}%\n"
+            msg += f"RSI: {rsi_change:+.1f}\n"
             msg += f"Distance: {distance} candles\n"
             
             if p2.price < p1.price and p2.rsi > p1.rsi:
-                msg += "✅ *BULLISH DIVERGENCE DETECTED!*\n"
+                msg += "✅ *BULLISH DIV DETECTED!*\n"
             else:
-                msg += "❌ No bullish divergence\n"
+                msg += "❌ No bullish div\n"
+        else:
+            msg += f"\n⚠️ Need 2+ valid lows for bullish check\n"
         
         if len(valid_highs) >= 2:
             p1, p2 = valid_highs[-2], valid_highs[-1]
@@ -298,19 +311,28 @@ async def debug_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rsi_change = p2.rsi - p1.rsi
             distance = p2.index - p1.index
             msg += f"\n*Bearish check:*\n"
-            msg += f"Price change: {price_pct:+.2f}%\n"
-            msg += f"RSI change: {rsi_change:+.1f}\n"
+            msg += f"Price: {price_pct:+.2f}%\n"
+            msg += f"RSI: {rsi_change:+.1f}\n"
             msg += f"Distance: {distance} candles\n"
             
             if p2.price > p1.price and p2.rsi < p1.rsi:
-                msg += "✅ *BEARISH DIVERGENCE DETECTED!*\n"
+                msg += "✅ *BEARISH DIV DETECTED!*\n"
             else:
-                msg += "❌ No bearish divergence\n"
+                msg += "❌ No bearish div\n"
+        else:
+            msg += f"\n⚠️ Need 2+ valid highs for bearish check\n"
+        
+        # Current RSI
+        msg += f"\n*Current:*\n"
+        msg += f"Price: ${df['close'].iloc[-1]:,.2f}\n"
+        msg += f"RSI: {df['rsi'].iloc[-1]:.1f}\n"
         
         await update.message.reply_text(msg, parse_mode='Markdown')
         
     except Exception as e:
-        await update.message.reply_text(f"❌ Debug error: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        await update.message.reply_text(f"❌ Debug error: {e}\n\n```{error_details[-500:]}```", parse_mode='Markdown')
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):

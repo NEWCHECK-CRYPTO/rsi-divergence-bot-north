@@ -43,25 +43,20 @@ TIMEFRAME_CONFIRMATION_MAP = {
 }
 
 # =============================================================================
-# DIVERGENCE DETECTION SETTINGS (KEY PARAMETERS!)
+# DIVERGENCE DETECTION SETTINGS - ULTRA LOOSE FOR TESTING
 # =============================================================================
 
-# How many candles to look back for finding divergences
-# Larger = more significant divergences, fewer signals
-# Smaller = more signals, but potentially noisy
-LOOKBACK_CANDLES = 60  # Look back 60 candles (was 100)
+# How many candles to look back
+LOOKBACK_CANDLES = 40  # Short lookback
 
 # Minimum candles between two swing points
-# Prevents detecting noise/small waves as divergences
-MIN_SWING_DISTANCE = 8  # Swings must be at least 8 candles apart (was 15)
+MIN_SWING_DISTANCE = 3  # Very close swings allowed
 
-# Minimum price move % to qualify as a significant swing
-# Filters out tiny price movements
-MIN_PRICE_MOVE_PCT = 1.0  # Swing must be at least 1% move (was 2%)
+# Minimum price move % to qualify as a swing
+MIN_PRICE_MOVE_PCT = 0.1  # Tiny swings count (0.1%)
 
-# How many candles on each side to confirm a swing high/low
-# Larger = more significant swings only
-SWING_STRENGTH_BARS = 5  # Need 5 candles each side (was 8)
+# How many candles on each side to confirm a swing
+SWING_STRENGTH_BARS = 2  # Just 2 candles each side
 
 # =============================================================================
 # RSI SETTINGS
