@@ -39,6 +39,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
         symbols = scanner.get_symbols_to_scan()
+        num_coins = len(symbols) if symbols else 0
         
         html = f"""<!DOCTYPE html><html><head><title>RSI Bot Working</title>
 <style>body{{font-family:system-ui;background:#0d1117;color:#fff;padding:40px}}
@@ -46,7 +47,7 @@ h1{{color:#58a6ff}}p{{color:#8b949e}}</style></head>
 <body>
 <h1>🤖 RSI Divergence Bot - V10</h1>
 <p>Exchange: <b>{EXCHANGE.upper()}</b></p>
-<p>Coins: <b>{len(symbols)}</b></p>
+<p>Coins: <b>{num_coins}</b></p>
 <p>Timeframes: <b>{', '.join(SCAN_TIMEFRAMES)}</b></p>
 <p>Subscribers: <b>{len(subscribers)}</b></p>
 <p>Status: <span style="color:#3fb950">✅ RUNNING</span></p>
@@ -68,10 +69,11 @@ def run_web_server():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
+    num_coins = len(symbols) if symbols else 0
     
     await update.message.reply_text(
         f"🤖 *RSI Divergence Bot - V10*\n\n"
-        f"📊 *{len(symbols)}* coins loaded\n"
+        f"📊 *{num_coins}* coins loaded\n"
         f"⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
         f"🦎 Exchange: *{EXCHANGE.upper()}*\n"
         f"⚡ Mode: *EXACT 2-CANDLE*\n\n"
@@ -90,21 +92,16 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔧 Running system check...")
     
     try:
-        # Test exchange connection
-        markets = scanner.exchange.markets
-        await update.message.reply_text(
-            f"✅ Exchange: {EXCHANGE.upper()} connected\n"
-            f"📊 Total markets: {len(markets)}"
-        )
+        # Test getting symbols
+        await update.message.reply_text("🔄 Checking coin list...")
+        symbols = scanner.get_symbols_to_scan()
         
-        # Test fetching coins
-        await update.message.reply_text("🔄 Fetching top coins...")
-        symbols = scanner.fetch_top_coins_by_volume(10)
-        
-        if len(symbols) > 0:
-            coins_list = "\n".join([f"{i}. {s}" for i, s in enumerate(symbols, 1)])
+        if symbols and len(symbols) > 0:
+            coins_list = "\n".join([f"{i}. {s}" for i, s in enumerate(symbols[:10], 1)])
             await update.message.reply_text(
-                f"✅ Successfully fetched {len(symbols)} coins:\n\n{coins_list}"
+                f"✅ Bot has {len(symbols)} coins loaded!\n\n"
+                f"Top 10:\n{coins_list}\n\n"
+                f"...and {len(symbols) - 10} more"
             )
             
             # Test scanning one symbol
@@ -113,23 +110,48 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if test_alerts:
                 await update.message.reply_text(f"🎯 Found signal on {symbols[0]}!")
+                msg = AlertFormatter.format_alert(test_alerts[0])
+                await update.message.reply_text(msg)
             else:
                 await update.message.reply_text(
-                    f"✅ Scan working (no signals found on {symbols[0]})\n\n"
-                    f"⚡ Alerts only sent when 2nd confirmation candle JUST closes!"
+                    f"✅ Scanner working! (no signals on {symbols[0]} right now)\n\n"
+                    f"⚡ Note: Alerts only when 2nd confirmation candle JUST closes\n\n"
+                    f"Bot is ready to scan {len(symbols)} coins!"
+                )
+                
+            # Test exchange connection
+            await update.message.reply_text("🔄 Testing exchange connection...")
+            test_df = scanner.fetch_ohlcv(symbols[0], "1h", limit=10)
+            
+            if test_df is not None:
+                await update.message.reply_text(
+                    f"✅ Exchange working!\n"
+                    f"Successfully fetched {len(test_df)} candles for {symbols[0]}\n\n"
+                    f"🎉 Everything is working perfectly!"
+                )
+            else:
+                await update.message.reply_text(
+                    f"⚠️ Exchange connection issue\n"
+                    f"Could not fetch chart data for {symbols[0]}\n\n"
+                    f"Try:\n"
+                    f"1. Change EXCHANGE to 'binance' in config.py\n"
+                    f"2. Check your internet connection\n"
+                    f"3. Use VPN if exchange is blocked"
                 )
         else:
             await update.message.reply_text(
-                "❌ ERROR: Could not fetch any coins!\n\n"
-                "Possible issues:\n"
-                "1. Exchange API is down\n"
-                "2. Network connectivity issue\n"
-                "3. API rate limit reached"
+                "❌ ERROR: No coins loaded!\n\n"
+                "This shouldn't happen with the simple scanner.\n"
+                "Check if divergence_scanner.py has SIMPLE_COINS list."
             )
     
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
         await update.message.reply_text(
-            f"❌ Debug failed:\n\n{str(e)}"
+            f"❌ Debug failed:\n\n"
+            f"Error: {str(e)}\n\n"
+            f"Details:\n{error_trace[:500]}"
         )
 
 
@@ -138,11 +160,12 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subscribers[chat_id] = {"min_strength": SignalStrength.EARLY}
     
     symbols = scanner.get_symbols_to_scan()
+    num_coins = len(symbols) if symbols else 0
     
     await update.message.reply_text(
         f"✅ *Subscribed!*\n\n"
         f"🦎 Exchange: {EXCHANGE.upper()}\n"
-        f"📊 Tracking: {len(symbols)} coins\n"
+        f"📊 Tracking: {num_coins} coins\n"
         f"🔄 Scan every {SCAN_INTERVAL//60} min\n"
         f"⚡ Alert: When 2nd candle JUST closes\n\n"
         f"You'll get FRESH signals only!\n"
@@ -158,17 +181,17 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Fetching top coins...")
-    symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
+    await update.message.reply_text("📊 Getting coin list...")
+    symbols = scanner.get_symbols_to_scan()
     
-    if len(symbols) == 0:
+    if not symbols or len(symbols) == 0:
         await update.message.reply_text(
-            "❌ Could not fetch coins!\n"
+            "❌ No coins loaded!\n"
             "Try /debug to check system status."
         )
         return
     
-    msg = f"📊 *Top {len(symbols)} Coins on {EXCHANGE.upper()}*\n\n"
+    msg = f"📊 *{len(symbols)} Coins Loaded*\n\n"
     for i, s in enumerate(symbols[:30], 1):
         msg += f"{i}. {s}\n"
     
@@ -181,7 +204,7 @@ async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
     
-    if len(symbols) == 0:
+    if not symbols or len(symbols) == 0:
         await update.message.reply_text(
             "❌ No coins loaded!\n"
             "Try /debug to check system status."
@@ -266,11 +289,12 @@ def main():
     logger.info(f"[{format_sl_time()}] Web server started")
     
     symbols = scanner.get_symbols_to_scan()
-    logger.info(f"[{format_sl_time()}] {EXCHANGE.upper()}: {len(symbols)} coins loaded")
+    num_coins = len(symbols) if symbols else 0
+    logger.info(f"[{format_sl_time()}] {EXCHANGE.upper()}: {num_coins} coins loaded")
     logger.info(f"[{format_sl_time()}] ⚡ EXACT 2-CANDLE MODE - Fresh signals only!")
     
-    if len(symbols) == 0:
-        logger.error(f"[{format_sl_time()}] WARNING: No coins loaded! Check exchange connection.")
+    if num_coins == 0:
+        logger.error(f"[{format_sl_time()}] WARNING: No coins loaded! Check divergence_scanner.py")
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
