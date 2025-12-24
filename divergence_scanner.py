@@ -223,7 +223,9 @@ class DivergenceScanner:
     def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
         """Fetch top coins by 24h volume"""
         try:
+            print(f"[{format_sl_time()}] Fetching tickers from {EXCHANGE.upper()}...")
             tickers = self.exchange.fetch_tickers()
+            print(f"[{format_sl_time()}] Received {len(tickers)} tickers")
             
             # Filter for USDT pairs
             usdt_pairs = {
@@ -231,6 +233,7 @@ class DivergenceScanner:
                 if symbol.endswith(f"/{QUOTE_CURRENCY}") 
                 and symbol not in EXCLUDED_SYMBOLS
             }
+            print(f"[{format_sl_time()}] Filtered to {len(usdt_pairs)} USDT pairs")
             
             # Exclude leveraged tokens
             if EXCLUDE_LEVERAGED:
@@ -238,6 +241,7 @@ class DivergenceScanner:
                     symbol: ticker for symbol, ticker in usdt_pairs.items()
                     if not any(x in symbol for x in ['UP/', 'DOWN/', 'BULL/', 'BEAR/', '3L/', '3S/'])
                 }
+                print(f"[{format_sl_time()}] After excluding leveraged: {len(usdt_pairs)} pairs")
             
             # Sort by volume
             sorted_pairs = sorted(
@@ -253,10 +257,13 @@ class DivergenceScanner:
             for rank, symbol in enumerate(top_symbols, 1):
                 self.volume_ranks[symbol] = rank
             
+            print(f"[{format_sl_time()}] Selected top {len(top_symbols)} coins by volume")
             return top_symbols
             
         except Exception as e:
-            print(f"Error fetching top coins: {e}")
+            print(f"[{format_sl_time()}] ERROR fetching top coins: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_symbols_to_scan(self) -> List[str]:
