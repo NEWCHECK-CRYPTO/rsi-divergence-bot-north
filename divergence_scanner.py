@@ -1,7 +1,6 @@
 """
-RSI Divergence Bot V10 - COMPLETE IMPLEMENTATION
-All features: 2-candle, MTF trend, recency checks, price movement filters
-Built from scratch - guaranteed working
+RSI Divergence Bot V10 - EXACT 2-CANDLE ALERT
+Alerts ONLY when 2nd confirmation candle JUST CLOSED (not before, not after)
 """
 
 import ccxt
@@ -13,6 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 import pytz
 import time
+import traceback
 
 from config import (
     EXCHANGE, SCAN_TIMEFRAMES, RSI_PERIOD, ALERT_COOLDOWN,
@@ -161,14 +161,12 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> float:
     low = df['low']
     close = df['close']
     
-    # True Range
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
     
-    # Directional Movement
     up_move = high - high.shift()
     down_move = low.shift() - low
     
@@ -200,69 +198,113 @@ def get_tradingview_link(symbol: str, timeframe: str) -> str:
 
 
 class DivergenceScanner:
-    """V10 Complete Scanner with all features"""
+    """V10 Scanner - EXACT 2-Candle Alert Only"""
     
     def __init__(self):
-        print(f"[{format_sl_time()}] Initializing V10 scanner...")
+        print(f"[{format_sl_time()}] 🔧 Initializing V10 scanner (EXACT 2-CANDLE MODE)...")
         
-        # Initialize exchange
         if EXCHANGE.lower() == "bybit":
-            self.exchange = ccxt.bybit()
+            self.exchange = ccxt.bybit({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'linear',
+                }
+            })
         elif EXCHANGE.lower() == "binance":
-            self.exchange = ccxt.binance()
+            self.exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'future',
+                }
+            })
         else:
             raise ValueError(f"Unsupported exchange: {EXCHANGE}")
         
-        self.exchange.load_markets()
+        print(f"[{format_sl_time()}] 🔄 Loading markets...")
+        try:
+            self.exchange.load_markets()
+            print(f"[{format_sl_time()}] ✅ Markets loaded: {len(self.exchange.markets)} pairs")
+        except Exception as e:
+            print(f"[{format_sl_time()}] ❌ ERROR loading markets: {e}")
+            traceback.print_exc()
         
         self.alert_cooldowns = {}
         self.volume_ranks = {}
         
-        print(f"[{format_sl_time()}] V10 Scanner initialized ({EXCHANGE.upper()})")
+        print(f"[{format_sl_time()}] ✅ V10 Scanner initialized ({EXCHANGE.upper()})")
     
     def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
         """Fetch top coins by 24h volume"""
         try:
-            print(f"[{format_sl_time()}] Fetching tickers from {EXCHANGE.upper()}...")
-            tickers = self.exchange.fetch_tickers()
-            print(f"[{format_sl_time()}] Received {len(tickers)} tickers")
+            print(f"[{format_sl_time()}] 🔄 Fetching tickers from {EXCHANGE.upper()}...")
             
-            # Filter for USDT pairs
+            tickers = self.exchange.fetch_tickers()
+            print(f"[{format_sl_time()}] 📊 Received {len(tickers)} total tickers")
+            
+            if len(tickers) == 0:
+                print(f"[{format_sl_time()}] ⚠️ WARNING: No tickers received, trying alternative method...")
+                
+                markets = self.exchange.markets
+                symbols = [s for s in markets.keys() if s.endswith(f"/{QUOTE_CURRENCY}")]
+                print(f"[{format_sl_time()}] 📝 Found {len(symbols)} {QUOTE_CURRENCY} pairs in markets")
+                
+                tickers = {}
+                for i, symbol in enumerate(symbols[:count], 1):
+                    try:
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        tickers[symbol] = ticker
+                        if i % 10 == 0:
+                            print(f"[{format_sl_time()}] 📈 Fetched {i}/{min(count, len(symbols))} tickers...")
+                        time.sleep(0.1)
+                    except Exception as e:
+                        continue
+                
+                print(f"[{format_sl_time()}] ✅ Fetched {len(tickers)} tickers via alternative method")
+            
             usdt_pairs = {
                 symbol: ticker for symbol, ticker in tickers.items()
                 if symbol.endswith(f"/{QUOTE_CURRENCY}") 
                 and symbol not in EXCLUDED_SYMBOLS
+                and ticker.get('quoteVolume') is not None
             }
-            print(f"[{format_sl_time()}] Filtered to {len(usdt_pairs)} USDT pairs")
+            print(f"[{format_sl_time()}] 🔍 Filtered to {len(usdt_pairs)} valid {QUOTE_CURRENCY} pairs")
             
-            # Exclude leveraged tokens
+            if len(usdt_pairs) == 0:
+                print(f"[{format_sl_time()}] ❌ ERROR: No valid pairs found after filtering!")
+                return []
+            
             if EXCLUDE_LEVERAGED:
                 usdt_pairs = {
                     symbol: ticker for symbol, ticker in usdt_pairs.items()
                     if not any(x in symbol for x in ['UP/', 'DOWN/', 'BULL/', 'BEAR/', '3L/', '3S/'])
                 }
-                print(f"[{format_sl_time()}] After excluding leveraged: {len(usdt_pairs)} pairs")
+                print(f"[{format_sl_time()}] 🚫 After excluding leveraged: {len(usdt_pairs)} pairs")
             
-            # Sort by volume
             sorted_pairs = sorted(
                 usdt_pairs.items(),
                 key=lambda x: x[1].get('quoteVolume', 0),
                 reverse=True
             )
             
-            # Get top N
             top_symbols = [symbol for symbol, _ in sorted_pairs[:count]]
             
-            # Store volume ranks
             for rank, symbol in enumerate(top_symbols, 1):
                 self.volume_ranks[symbol] = rank
             
-            print(f"[{format_sl_time()}] Selected top {len(top_symbols)} coins by volume")
+            print(f"[{format_sl_time()}] ✅ Selected top {len(top_symbols)} coins by volume")
+            
+            if len(top_symbols) > 0:
+                print(f"[{format_sl_time()}] 🏆 Top 10 coins:")
+                for i, symbol in enumerate(top_symbols[:10], 1):
+                    vol = usdt_pairs[symbol].get('quoteVolume', 0)
+                    print(f"  {i}. {symbol} (Vol: ${vol:,.0f})")
+            
             return top_symbols
             
         except Exception as e:
-            print(f"[{format_sl_time()}] ERROR fetching top coins: {e}")
-            import traceback
+            print(f"[{format_sl_time()}] ❌ CRITICAL ERROR fetching top coins:")
+            print(f"[{format_sl_time()}] Error type: {type(e).__name__}")
+            print(f"[{format_sl_time()}] Error message: {str(e)}")
             traceback.print_exc()
             return []
     
@@ -282,7 +324,7 @@ class DivergenceScanner:
             return df
             
         except Exception as e:
-            print(f"Error fetching {symbol} {timeframe}: {e}")
+            print(f"❌ Error fetching {symbol} {timeframe}: {e}")
             return None
     
     def find_swing_highs(self, df: pd.DataFrame, strength: int = 3) -> List[SwingPoint]:
@@ -331,73 +373,72 @@ class DivergenceScanner:
     
     def check_price_invalidation(self, df: pd.DataFrame, swing1: SwingPoint, 
                                  swing2: SwingPoint, is_bullish: bool) -> bool:
-        """V9: Check if middle troughs break the pattern"""
+        """Check if middle troughs break the pattern"""
         start_idx = swing1.index
         end_idx = swing2.index
         
         middle_section = df.iloc[start_idx + 1:end_idx]
         
         if is_bullish:
-            # For bullish, check if any trough goes below Swing 2
             min_middle = middle_section['low'].min()
             if min_middle < swing2.price:
-                return False  # Invalidated
+                return False
         else:
-            # For bearish, check if any peak goes above Swing 2
             max_middle = middle_section['high'].max()
             if max_middle > swing2.price:
-                return False  # Invalidated
+                return False
         
-        return True  # Valid
+        return True
     
     def check_rsi_invalidation(self, df: pd.DataFrame, swing1: SwingPoint,
                                swing2: SwingPoint, is_bullish: bool) -> bool:
-        """V9: Check if middle RSI values break the pattern"""
+        """Check if middle RSI values break the pattern"""
         start_idx = swing1.index
         end_idx = swing2.index
         
         middle_rsi = df['rsi'].iloc[start_idx + 1:end_idx]
         
         if is_bullish:
-            # For bullish HL, no middle RSI should be below Swing 1
             min_middle_rsi = middle_rsi.min()
             if min_middle_rsi < swing1.rsi:
-                return False  # Invalidated
+                return False
         else:
-            # For bearish LH, no middle RSI should be above Swing 1
             max_middle_rsi = middle_rsi.max()
             if max_middle_rsi > swing1.rsi:
-                return False  # Invalidated
-        
-        return True  # Valid
-    
-    def check_recency(self, current_idx: int, swing2_idx: int, timeframe: str) -> bool:
-        """V10: Check if Swing 2 is recent enough"""
-        candles_since = current_idx - swing2_idx
-        max_allowed = MAX_CANDLES_SINCE_SWING2.get(timeframe, 10)
-        
-        if candles_since > max_allowed:
-            print(f"  ⚠️  Recency FAIL: {candles_since} candles ago (max {max_allowed})")
-            return False
+                return False
         
         return True
     
-    def check_price_movement(self, current_price: float, swing2_price: float) -> Tuple[bool, float]:
-        """V10: Check if price hasn't moved too much already"""
-        move_pct = abs(current_price - swing2_price) / swing2_price
+    def check_exact_2candle_timing(self, current_idx: int, swing2_idx: int) -> bool:
+        """
+        CRITICAL: Only alert if we're EXACTLY at the 2nd confirmation candle
         
-        # Max 15% movement before signal
-        if move_pct > 0.15:
-            print(f"  ⚠️  Price Movement FAIL: {move_pct*100:.1f}% (max 15%)")
-            return False, move_pct
+        Timeline:
+        - Swing 2 happens at index N
+        - Candle 1 (confirmation) at index N+1
+        - Candle 2 (confirmation) at index N+2  <-- ALERT ONLY HERE
+        - Current candle must be at index N+2 (latest bar)
         
-        return True, move_pct
+        If current is N+3, N+4, etc = TOO LATE, no alert
+        """
+        candles_after_swing2 = current_idx - swing2_idx
+        
+        # MUST be exactly 2 candles after Swing 2
+        if candles_after_swing2 != 2:
+            if candles_after_swing2 < 2:
+                print(f"  ⏳ Too Early: Only {candles_after_swing2} candle(s) after Swing 2")
+            else:
+                print(f"  ❌ Too Late: {candles_after_swing2} candles after Swing 2 (max allowed: 2)")
+            return False
+        
+        print(f"  ✅ Perfect Timing: Exactly 2 candles after Swing 2")
+        return True
     
     def check_2_candle_confirmation(self, df: pd.DataFrame, is_bullish: bool,
                                     swing2_idx: int) -> ConfirmationStatus:
-        """V10: 2-candle confirmation (optimal)"""
+        """2-candle confirmation check"""
         start_idx = swing2_idx + 1
-        end_idx = swing2_idx + 3  # Check 2 candles
+        end_idx = swing2_idx + 3
         
         if end_idx > len(df):
             return ConfirmationStatus(
@@ -408,7 +449,6 @@ class DivergenceScanner:
         rsi_values = df['rsi'].iloc[start_idx:end_idx].tolist()
         price_values = df['close'].iloc[start_idx:end_idx].tolist()
         
-        # Check both candles
         if is_bullish:
             c1_rsi_rising = rsi_values[0] > df['rsi'].iloc[swing2_idx]
             c1_price_rising = price_values[0] > df['close'].iloc[swing2_idx]
@@ -428,7 +468,6 @@ class DivergenceScanner:
             rsi_rising_count = (1 if c1_rsi_falling else 0) + (1 if c2_rsi_falling else 0)
             price_rising_count = (1 if c1_price_falling else 0) + (1 if c2_price_falling else 0)
         
-        # Both candles must confirm (2/2)
         is_confirmed = (rsi_rising_count == 2 and price_rising_count == 2)
         
         return ConfirmationStatus(
@@ -441,11 +480,9 @@ class DivergenceScanner:
         )
     
     def check_momentum_with_adx(self, df: pd.DataFrame, is_bullish: bool) -> MomentumStatus:
-        """V10: Check momentum using ADX instead of volume"""
-        # Calculate ADX
+        """Check momentum using ADX"""
         adx = calculate_adx(df, period=14)
         
-        # Determine trend strength
         if adx > MIN_ADX_STRONG:
             adx_confirmed = True
             adx_direction = "Strong 💪"
@@ -456,7 +493,6 @@ class DivergenceScanner:
             adx_confirmed = False
             adx_direction = "Weak ⚠️"
         
-        # Check RSI direction (last 5 candles)
         rsi_values = df['rsi'].tail(5)
         rsi_rising = all(rsi_values.iloc[i] > rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         rsi_falling = all(rsi_values.iloc[i] < rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
@@ -471,7 +507,6 @@ class DivergenceScanner:
             rsi_direction = "Sideways ↔️"
             rsi_confirmed = False
         
-        # Check price direction
         price_values = df['close'].tail(5)
         price_rising = all(price_values.iloc[i] > price_values.iloc[i-1] for i in range(1, len(price_values)))
         price_falling = all(price_values.iloc[i] < price_values.iloc[i-1] for i in range(1, len(price_values)))
@@ -496,21 +531,17 @@ class DivergenceScanner:
         )
     
     def check_mtf_trend(self, symbol: str, signal_tf: str, is_bullish: bool) -> Optional[MTFTrendStatus]:
-        """V10: Multi-timeframe trend confirmation"""
-        # Get lower timeframe
+        """Multi-timeframe trend confirmation"""
         lower_tf = TREND_CONFIRMATION_MAP.get(signal_tf)
         if not lower_tf:
             return None
         
-        # Fetch lower TF data
         df_lower = self.fetch_ohlcv(symbol, lower_tf, limit=50)
         if df_lower is None or len(df_lower) < 20:
             return None
         
-        # Calculate ADX on lower TF
         adx = calculate_adx(df_lower, period=14)
         
-        # Check price trend (last 5 candles)
         price_values = df_lower['close'].tail(5)
         price_rising = all(price_values.iloc[i] > price_values.iloc[i-1] for i in range(1, len(price_values)))
         price_falling = all(price_values.iloc[i] < price_values.iloc[i-1] for i in range(1, len(price_values)))
@@ -522,7 +553,6 @@ class DivergenceScanner:
         else:
             price_trend = "Sideways ↔️"
         
-        # Check RSI trend
         rsi_values = df_lower['rsi'].tail(5)
         rsi_rising = all(rsi_values.iloc[i] > rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         rsi_falling = all(rsi_values.iloc[i] < rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
@@ -534,7 +564,6 @@ class DivergenceScanner:
         else:
             rsi_trend = "Sideways ↔️"
         
-        # Classify trend
         if adx > MIN_ADX_STRONG:
             trend_strength = "Very Strong"
         elif adx > MIN_ADX_MODERATE:
@@ -549,7 +578,6 @@ class DivergenceScanner:
         else:
             trend_direction = f"{trend_strength} (Conflicting)"
         
-        # Determine confirmation
         if adx < MIN_ADX_MODERATE:
             is_confirmed = False
             confidence_boost = -0.10
@@ -578,9 +606,8 @@ class DivergenceScanner:
     
     def detect_divergence(self, df: pd.DataFrame, swing_lows: List[SwingPoint],
                           swing_highs: List[SwingPoint]) -> Optional[Divergence]:
-        """Detect divergences with all V9 checks"""
+        """Detect divergences"""
         
-        # Check bullish regular
         if len(swing_lows) >= 2:
             for i in range(len(swing_lows) - 1):
                 swing1 = swing_lows[i]
@@ -590,13 +617,10 @@ class DivergenceScanner:
                 if candles_apart < MIN_SWING_DISTANCE or candles_apart > 50:
                     continue
                 
-                # Price lower low, RSI higher low
                 if swing2.price < swing1.price and swing2.rsi > swing1.rsi:
-                    # V9: Price invalidation
                     if not self.check_price_invalidation(df, swing1, swing2, True):
                         continue
                     
-                    # V9: RSI invalidation
                     if not self.check_rsi_invalidation(df, swing1, swing2, True):
                         continue
                     
@@ -610,7 +634,6 @@ class DivergenceScanner:
                         confidence=0.75
                     )
         
-        # Check bearish regular
         if len(swing_highs) >= 2:
             for i in range(len(swing_highs) - 1):
                 swing1 = swing_highs[i]
@@ -620,13 +643,10 @@ class DivergenceScanner:
                 if candles_apart < MIN_SWING_DISTANCE or candles_apart > 50:
                     continue
                 
-                # Price higher high, RSI lower high
                 if swing2.price > swing1.price and swing2.rsi < swing1.rsi:
-                    # V9: Price invalidation
                     if not self.check_price_invalidation(df, swing1, swing2, False):
                         continue
                     
-                    # V9: RSI invalidation
                     if not self.check_rsi_invalidation(df, swing1, swing2, False):
                         continue
                     
@@ -656,7 +676,10 @@ class DivergenceScanner:
         self.alert_cooldowns[key] = time.time()
     
     def scan_symbol(self, symbol: str, timeframe: str) -> List[AlertSignal]:
-        """V10 Complete scan with all filters"""
+        """
+        EXACT 2-CANDLE SCAN
+        Only alerts when current candle is EXACTLY the 2nd confirmation candle
+        """
         alerts = []
         
         if self._is_on_cooldown(symbol, timeframe):
@@ -678,33 +701,27 @@ class DivergenceScanner:
         current_idx = len(df) - 1
         swing2_idx = divergence.swing2.index
         
-        # V10 FILTER 1: Recency check
-        if not self.check_recency(current_idx, swing2_idx, timeframe):
+        # ⚡ CRITICAL CHECK: Must be EXACTLY 2 candles after Swing 2
+        if not self.check_exact_2candle_timing(current_idx, swing2_idx):
             return alerts
         
-        # V10 FILTER 2: Price movement check
-        movement_ok, move_pct = self.check_price_movement(divergence.current_price, divergence.swing2.price)
-        if not movement_ok:
-            return alerts
-        
-        # V10 FILTER 3: 2-candle confirmation
+        # Check 2-candle confirmation
         confirmation = self.check_2_candle_confirmation(df, is_bullish, swing2_idx)
         if not confirmation.is_confirmed:
             return alerts
         
-        # V10 FILTER 4: Momentum check (ADX)
+        # Momentum check
         momentum = self.check_momentum_with_adx(df, is_bullish)
         
-        # V10 FILTER 5: MTF trend check (optional but recommended)
+        # MTF trend check
         mtf_trend = self.check_mtf_trend(symbol, timeframe, is_bullish)
         if mtf_trend and not mtf_trend.is_confirmed:
-            print(f"  ⚠️  MTF Trend FAIL: {mtf_trend.trend_direction}")
+            print(f"  ⚠️ MTF Trend FAIL: {mtf_trend.trend_direction}")
             return alerts
         
-        # Calculate final confidence
+        # Calculate confidence
         base_confidence = divergence.confidence
         
-        # Apply boosts
         if confirmation.is_confirmed:
             base_confidence += 0.10
         
@@ -716,11 +733,9 @@ class DivergenceScanner:
         
         final_confidence = min(base_confidence, 0.95)
         
-        # Check minimum confidence
         if final_confidence < MIN_CONFIDENCE:
             return alerts
         
-        # Determine signal strength
         if final_confidence >= 0.85:
             strength = SignalStrength.STRONG
         elif final_confidence >= 0.75:
@@ -729,6 +744,8 @@ class DivergenceScanner:
             strength = SignalStrength.EARLY
         
         self._set_cooldown(symbol, timeframe)
+        
+        print(f"  🎯 ALERT GENERATED: {symbol} {timeframe} ({strength.value.upper()})")
         
         alerts.append(AlertSignal(
             symbol=symbol,
@@ -753,7 +770,7 @@ class DivergenceScanner:
         all_alerts = []
         symbols = self.get_symbols_to_scan()
         
-        print(f"[{format_sl_time()}] Scanning {len(symbols)} symbols...")
+        print(f"[{format_sl_time()}] 🔍 Scanning {len(symbols)} symbols...")
         
         for symbol in symbols:
             for timeframe in SCAN_TIMEFRAMES:
@@ -762,21 +779,20 @@ class DivergenceScanner:
                     all_alerts.extend(alerts)
                     time.sleep(0.1)
                 except Exception as e:
-                    print(f"Error scanning {symbol} {timeframe}: {e}")
+                    print(f"❌ Error scanning {symbol} {timeframe}: {e}")
         
         return all_alerts
 
 
 class AlertFormatter:
-    """Format V10 alerts for Telegram"""
+    """Format alerts for Telegram"""
     
     @staticmethod
     def format_alert(alert: AlertSignal) -> str:
-        """Format complete V10 alert"""
+        """Format complete alert"""
         div = alert.divergence
         is_bull = "BULLISH" in div.divergence_type.value.upper()
         
-        # Strength
         if alert.signal_strength == SignalStrength.STRONG:
             emoji, label = "🟢", "STRONG"
         elif alert.signal_strength == SignalStrength.MEDIUM:
@@ -786,16 +802,13 @@ class AlertFormatter:
         
         direction = "BULLISH 📈" if is_bull else "BEARISH 📉"
         
-        # Format prices
         def fmt(p):
             return f"${p:,.2f}" if p >= 1 else f"${p:.6f}"
         
-        # Confirmation
         conf = alert.confirmation
-        conf_emoji = "✅" if conf.is_confirmed else "⏳"
+        conf_emoji = "✅"
         conf_text = f"2-Candle Confirmed! RSI:{conf.rsi_rising_count}/2 Price:{conf.price_rising_count}/2"
         
-        # MTF Trend
         mtf = alert.mtf_trend
         if mtf:
             adx_emoji = "✅" if mtf.adx > MIN_ADX_MODERATE else "❌"
@@ -807,13 +820,11 @@ class AlertFormatter:
         else:
             mtf_section = ""
         
-        # Momentum
         mom = alert.momentum
         rsi_emoji = "✅" if mom.rsi_confirmed else "⏳"
         price_emoji = "✅" if mom.price_confirmed else "⏳"
         adx_emoji = "✅" if mom.adx_value > MIN_ADX_MODERATE else "⚠️"
         
-        # Entry/SL/TP
         entry = div.current_price
         if is_bull:
             sl = min(div.swing1.price, div.swing2.price) * 0.99
@@ -836,9 +847,10 @@ Swing 1: {fmt(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
 Swing 2: {fmt(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
 Now: {fmt(div.current_price)} (RSI: {div.current_rsi:.1f})
 
-📏 {div.candles_apart} candles apart
+🔍 {div.candles_apart} candles apart
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {conf_emoji} {conf_text}
+⚡ JUST CONFIRMED (2nd candle closed)
 {mtf_section}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {rsi_emoji} RSI ({alert.signal_tf}): {mom.rsi_direction}

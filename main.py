@@ -1,5 +1,6 @@
 """
-Main Telegram Bot - MINIMAL V10 VERSION
+Main Telegram Bot - V10 with DEBUG mode
+EXACT 2-CANDLE ALERTS ONLY
 """
 
 import asyncio
@@ -49,6 +50,7 @@ h1{{color:#58a6ff}}p{{color:#8b949e}}</style></head>
 <p>Subscribers: <b>{len(subscribers)}</b></p>
 <p>Status: <span style="color:#3fb950">✅ RUNNING</span></p>
 <p>Time: {format_sl_time()}</p>
+<p style="color:#58a6ff">⚡ EXACT 2-CANDLE MODE</p>
 </body></html>"""
         
         self.wfile.write(html.encode())
@@ -68,26 +70,82 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"🤖 *RSI Divergence Bot - V10*\n\n"
-        f"📊 *{len(symbols)}* coins\n"
+        f"📊 *{len(symbols)}* coins loaded\n"
         f"⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"🦎 Exchange: *{EXCHANGE.upper()}*\n\n"
+        f"🦎 Exchange: *{EXCHANGE.upper()}*\n"
+        f"⚡ Mode: *EXACT 2-CANDLE*\n\n"
         f"*Commands:*\n"
         f"/subscribe - Get alerts\n"
         f"/scan - Manual scan\n"
-        f"/coins - List coins\n\n"
+        f"/coins - List coins\n"
+        f"/debug - System check ⚙️\n\n"
         f"🇱🇰 {format_sl_time()}",
         parse_mode='Markdown'
     )
+
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug command to check system"""
+    await update.message.reply_text("🔧 Running system check...")
+    
+    try:
+        # Test exchange connection
+        markets = scanner.exchange.markets
+        await update.message.reply_text(
+            f"✅ Exchange: {EXCHANGE.upper()} connected\n"
+            f"📊 Total markets: {len(markets)}"
+        )
+        
+        # Test fetching coins
+        await update.message.reply_text("🔄 Fetching top coins...")
+        symbols = scanner.fetch_top_coins_by_volume(10)
+        
+        if len(symbols) > 0:
+            coins_list = "\n".join([f"{i}. {s}" for i, s in enumerate(symbols, 1)])
+            await update.message.reply_text(
+                f"✅ Successfully fetched {len(symbols)} coins:\n\n{coins_list}"
+            )
+            
+            # Test scanning one symbol
+            await update.message.reply_text(f"🔍 Testing scan on {symbols[0]}...")
+            test_alerts = scanner.scan_symbol(symbols[0], "4h")
+            
+            if test_alerts:
+                await update.message.reply_text(f"🎯 Found signal on {symbols[0]}!")
+            else:
+                await update.message.reply_text(
+                    f"✅ Scan working (no signals found on {symbols[0]})\n\n"
+                    f"⚡ Alerts only sent when 2nd confirmation candle JUST closes!"
+                )
+        else:
+            await update.message.reply_text(
+                "❌ ERROR: Could not fetch any coins!\n\n"
+                "Possible issues:\n"
+                "1. Exchange API is down\n"
+                "2. Network connectivity issue\n"
+                "3. API rate limit reached"
+            )
+    
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Debug failed:\n\n{str(e)}"
+        )
 
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     subscribers[chat_id] = {"min_strength": SignalStrength.EARLY}
     
+    symbols = scanner.get_symbols_to_scan()
+    
     await update.message.reply_text(
         f"✅ *Subscribed!*\n\n"
         f"🦎 Exchange: {EXCHANGE.upper()}\n"
+        f"📊 Tracking: {len(symbols)} coins\n"
         f"🔄 Scan every {SCAN_INTERVAL//60} min\n"
+        f"⚡ Alert: When 2nd candle JUST closes\n\n"
+        f"You'll get FRESH signals only!\n"
+        f"No old/late alerts 🚫\n\n"
         f"🇱🇰 {format_sl_time()}",
         parse_mode='Markdown'
     )
@@ -99,8 +157,15 @@ async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Fetching coins...")
+    await update.message.reply_text("🔄 Fetching top coins...")
     symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
+    
+    if len(symbols) == 0:
+        await update.message.reply_text(
+            "❌ Could not fetch coins!\n"
+            "Try /debug to check system status."
+        )
+        return
     
     msg = f"📊 *Top {len(symbols)} Coins on {EXCHANGE.upper()}*\n\n"
     for i, s in enumerate(symbols[:30], 1):
@@ -114,9 +179,18 @@ async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
+    
+    if len(symbols) == 0:
+        await update.message.reply_text(
+            "❌ No coins loaded!\n"
+            "Try /debug to check system status."
+        )
+        return
+    
     await update.message.reply_text(
         f"🔍 *Scanning {len(symbols)} coins...*\n\n"
         f"⏰ TFs: {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"⚡ Looking for FRESH 2-candle confirms\n"
         f"⏳ This takes 3-5 minutes...",
         parse_mode='Markdown'
     )
@@ -126,7 +200,8 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if alerts:
             await update.message.reply_text(
-                f"✅ *Found {len(alerts)} signals!*",
+                f"✅ *Found {len(alerts)} FRESH signals!*\n"
+                f"⚡ All 2nd candle JUST closed!",
                 parse_mode='Markdown'
             )
             
@@ -142,7 +217,9 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         else:
             await update.message.reply_text(
-                f"🔭 *No divergences found*\n\n"
+                f"🔭 *No FRESH divergences found*\n\n"
+                f"Scanned {len(symbols)} coins across {len(SCAN_TIMEFRAMES)} timeframes.\n\n"
+                f"⚡ Only alerts when 2nd candle JUST closes\n"
                 f"Try again in 1-2 hours.\n\n"
                 f"🇱🇰 {format_sl_time()}",
                 parse_mode='Markdown'
@@ -162,11 +239,11 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
         alerts = scanner.scan_all()
         
         if not alerts:
-            logger.info(f"[{format_sl_time()}] No signals found")
+            logger.info(f"[{format_sl_time()}] No FRESH signals found")
             return
         
         for alert in alerts:
-            logger.info(f"[{format_sl_time()}] Signal: {alert.symbol} {alert.signal_tf}")
+            logger.info(f"[{format_sl_time()}] FRESH Signal: {alert.symbol} {alert.signal_tf}")
         
         for chat_id in subscribers.keys():
             for alert in alerts[:5]:
@@ -177,7 +254,7 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Send error: {e}")
         
-        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} alerts")
+        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} FRESH alerts")
     
     except Exception as e:
         logger.error(f"[{format_sl_time()}] Scan error: {e}")
@@ -189,6 +266,10 @@ def main():
     
     symbols = scanner.get_symbols_to_scan()
     logger.info(f"[{format_sl_time()}] {EXCHANGE.upper()}: {len(symbols)} coins loaded")
+    logger.info(f"[{format_sl_time()}] ⚡ EXACT 2-CANDLE MODE - Fresh signals only!")
+    
+    if len(symbols) == 0:
+        logger.error(f"[{format_sl_time()}] WARNING: No coins loaded! Check exchange connection.")
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
@@ -197,6 +278,7 @@ def main():
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("scan", manual_scan))
     app.add_handler(CommandHandler("coins", show_coins))
+    app.add_handler(CommandHandler("debug", debug))
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
