@@ -65,6 +65,7 @@ class SwingPoint:
     price: float
     rsi: float
     timestamp: datetime
+    date_str: str  # Exact date for TradingView verification
 
 
 @dataclass
@@ -269,7 +270,8 @@ class SimpleDivergenceScanner:
                     index=i,
                     price=df['close'].iloc[i],
                     rsi=df['rsi'].iloc[i],
-                    timestamp=df['timestamp'].iloc[i]
+                    timestamp=df['timestamp'].iloc[i],
+                    date_str=df['timestamp'].iloc[i].strftime('%Y-%m-%d')
                 ))
         
         return swings
@@ -290,7 +292,8 @@ class SimpleDivergenceScanner:
                     index=i,
                     price=df['close'].iloc[i],
                     rsi=df['rsi'].iloc[i],
-                    timestamp=df['timestamp'].iloc[i]
+                    timestamp=df['timestamp'].iloc[i],
+                    date_str=df['timestamp'].iloc[i].strftime('%Y-%m-%d')
                 ))
         
         return swings
@@ -659,9 +662,9 @@ class AlertFormatter:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📈 {div.divergence_type.value.replace('_', ' ').title()}
 
-Swing 1: {fmt(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
-Swing 2: {fmt(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
-Now: {fmt(div.current_price)} (RSI: {div.current_rsi:.1f})
+Swing 1: {div.swing1.date_str} @ {fmt(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
+Swing 2: {div.swing2.date_str} @ {fmt(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
+Current: {fmt(div.current_price)} (RSI: {div.current_rsi:.1f})
 
 🔍 {div.candles_apart} candles apart
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -672,8 +675,18 @@ Now: {fmt(div.current_price)} (RSI: {div.current_rsi:.1f})
 🛑 SL: {fmt(sl)} | 🎯 TP: {fmt(tp)}
 
 🔥 Confidence: {alert.total_confidence * 100:.0f}%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ VERIFY BEFORE TRADING:
+1. Open TradingView BYBIT:{alert.symbol.replace('/', '')}
+2. Set to {alert.signal_tf.upper()} timeframe
+3. Check {div.swing1.date_str} = {fmt(div.swing1.price)}
+4. Check {div.swing2.date_str} = {fmt(div.swing2.price)}
+5. Prices match (±$10)? → Trade ✅
+6. Prices differ? → DO NOT TRADE ❌
+
 📺 {alert.tradingview_link}
 
-⚠️ DYOR | 🇱🇰 {format_sl_time()}"""
+🇱🇰 {format_sl_time()}"""
         
         return msg
