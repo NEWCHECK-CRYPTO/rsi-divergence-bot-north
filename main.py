@@ -19,7 +19,8 @@ from config import (
     TOP_COINS_COUNT, TIMEZONE, EXCHANGE
 )
 from divergence_scanner import (
-    DivergenceScanner, AlertFormatter, SignalStrength, 
+    SimpleDivergenceScanner as DivergenceScanner, 
+    AlertFormatter, SignalStrength, 
     get_sl_time, format_sl_time
 )
 
