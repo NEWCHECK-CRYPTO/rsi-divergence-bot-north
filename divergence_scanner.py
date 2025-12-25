@@ -22,9 +22,10 @@ CONDITIONS FOR VALID SIGNAL:
    - BULLISH: RSI < 40 (oversold territory)
    - BEARISH: RSI > 60 (overbought territory)
 4. Swings are 5-50 candles apart
-5. Pattern not invalidated between swings:
-   - BULLISH: No CLOSE below Swing2 AND no RSI below Swing1
-   - BEARISH: No CLOSE above Swing2 AND no RSI above Swing1
+5. Pattern not invalidated between swings (PRICE ONLY):
+   - BULLISH: No CLOSE below Swing2 CLOSE
+   - BEARISH: No CLOSE above Swing2 CLOSE
+   - RSI between swings is NOT checked (this is normal behavior)
 6. Swing 2 is recent (within last 3 candles = just formed)
 """
 
@@ -421,15 +422,20 @@ class DivergenceScanner:
                                 swing2: SwingPoint, is_bullish: bool) -> Tuple[bool, str]:
         """
         Check if pattern is not broken by middle candles
-        Using CLOSE prices for consistency with swing detection
+        Using CLOSE prices - Only checks PRICE invalidation (not RSI)
         
         For BULLISH:
         - No candle CLOSE should go below Swing2 CLOSE (price invalidation)
-        - No candle RSI should go below Swing1 RSI (RSI invalidation)
+        - RSI can do whatever it wants between swings (this is normal)
         
         For BEARISH:
         - No candle CLOSE should go above Swing2 CLOSE (price invalidation)
-        - No candle RSI should go above Swing1 RSI (RSI invalidation)
+        - RSI can do whatever it wants between swings (this is normal)
+        
+        WHY NO RSI INVALIDATION?
+        - RSI going more extreme then recovering IS the divergence
+        - Most professional indicators don't check RSI between swings
+        - Only the relationship between Swing1 and Swing2 RSI matters
         """
         start_idx = swing1.index + 1
         end_idx = swing2.index
@@ -440,28 +446,18 @@ class DivergenceScanner:
         middle = df.iloc[start_idx:end_idx]
         
         if is_bullish:
-            # PRICE CHECK: No lower close than Swing2
+            # PRICE CHECK ONLY: No lower close than Swing2
             min_close = middle['close'].min()
             if min_close < swing2.price:
                 return False, f"Price invalid: Close ${min_close:.2f} < Swing2 ${swing2.price:.2f}"
-            
-            # RSI CHECK: No RSI should go below Swing1 RSI
-            min_rsi = middle['rsi'].min()
-            if min_rsi < swing1.rsi:
-                return False, f"RSI invalid: RSI {min_rsi:.1f} dropped below Swing1 RSI {swing1.rsi:.1f}"
         
         else:  # Bearish
-            # PRICE CHECK: No higher close than Swing2
+            # PRICE CHECK ONLY: No higher close than Swing2
             max_close = middle['close'].max()
             if max_close > swing2.price:
                 return False, f"Price invalid: Close ${max_close:.2f} > Swing2 ${swing2.price:.2f}"
-            
-            # RSI CHECK: No RSI should go above Swing1 RSI
-            max_rsi = middle['rsi'].max()
-            if max_rsi > swing1.rsi:
-                return False, f"RSI invalid: RSI {max_rsi:.1f} rose above Swing1 RSI {swing1.rsi:.1f}"
         
-        return True, "Price & RSI pattern intact"
+        return True, "Pattern intact"
     
     def detect_divergences(self, symbol: str, df: pd.DataFrame) -> List[AlertSignal]:
         """

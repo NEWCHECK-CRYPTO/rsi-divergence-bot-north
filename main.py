@@ -116,9 +116,7 @@ async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. RSI makes HIGHER LOW (Swing2 RSI > Swing1 RSI)
 4. RSI is OVERSOLD (< {RSI_OVERSOLD})
 5. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
-6. Pattern NOT invalidated between swings:
-   • No candle CLOSE below Swing2 CLOSE
-   • No candle RSI below Swing1 RSI
+6. No candle CLOSE below Swing2 CLOSE between swings
 7. Swing2 formed within last {MAX_CANDLES_SINCE_SWING2} candles
 
 *For BEARISH Divergence:*
@@ -127,10 +125,10 @@ async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. RSI makes LOWER HIGH (Swing2 RSI < Swing1 RSI)
 4. RSI is OVERBOUGHT (> {RSI_OVERBOUGHT})
 5. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
-6. Pattern NOT invalidated between swings:
-   • No candle CLOSE above Swing2 CLOSE
-   • No candle RSI above Swing1 RSI
+6. No candle CLOSE above Swing2 CLOSE between swings
 7. Swing2 formed within last {MAX_CANDLES_SINCE_SWING2} candles
+
+*Note:* RSI between swings is NOT checked - only the relationship between Swing1 and Swing2 RSI matters.
 
 *Signal Strength:*
 🟢 STRONG: RSI < 30 (bullish) or > 70 (bearish)
