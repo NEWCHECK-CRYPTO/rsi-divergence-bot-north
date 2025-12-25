@@ -9,13 +9,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import os
 import threading
 import pytz
+import pandas as pd
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from config import (
     TELEGRAM_TOKEN, SCAN_TIMEFRAMES, SCAN_INTERVAL, 
-    TOP_COINS_COUNT, TIMEZONE, EXCHANGE
+    TOP_COINS_COUNT, TIMEZONE, EXCHANGE, MAX_CANDLES_SINCE_SWING2
 )
 from divergence_scanner import (
     DivergenceScanner, AlertFormatter, SignalStrength, 
@@ -75,6 +76,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/subscribe - Get alerts\n"
         f"/scan - Manual scan\n"
         f"/coins - List coins\n"
+        f"/verify SYMBOL TF - Verify signal\n"
         f"/debug - Full diagnostic\n"
         f"/debugraw - Raw API data\n\n"
         f"Time: {format_sl_time()}",
@@ -342,6 +344,249 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"```\n{full_report}\n```", parse_mode='Markdown')
 
 
+async def verify_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verify a signal with full raw data for TradingView comparison"""
+    args = context.args
+    
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "*Signal Verification Tool*\n\n"
+            "Usage: `/verify SYMBOL TIMEFRAME`\n\n"
+            "Examples:\n"
+            "`/verify BTC/USDT 4h`\n"
+            "`/verify ETH/USDT 1h`\n"
+            "`/verify SOL/USDT 1d`\n\n"
+            "This will show raw candle data, RSI values, and swing points "
+            "so you can verify against TradingView.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    symbol = args[0].upper()
+    if '/' not in symbol:
+        symbol = symbol + '/USDT'
+    
+    timeframe = args[1].lower()
+    
+    await update.message.reply_text(f"*Analyzing {symbol} on {timeframe}...*", parse_mode='Markdown')
+    
+    try:
+        # Fetch data
+        df = scanner.fetch_ohlcv(symbol, timeframe, limit=60)
+        
+        if df is None or len(df) < 30:
+            await update.message.reply_text(f"Could not fetch data for {symbol}")
+            return
+        
+        # Build verification report
+        report = []
+        report.append("=" * 45)
+        report.append(f"SIGNAL VERIFICATION: {symbol} {timeframe.upper()}")
+        report.append("=" * 45)
+        report.append(f"Generated: {format_sl_time()}")
+        report.append("")
+        
+        # TradingView Link
+        tv_link = f"https://www.tradingview.com/chart/?symbol=BYBIT:{symbol.replace('/', '')}&interval="
+        tf_map = {"1m": "1", "5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D", "1w": "W"}
+        tv_link += tf_map.get(timeframe, "240")
+        report.append(f"TradingView: {tv_link}")
+        report.append("")
+        
+        # SECTION 1: Latest Candles (for TradingView comparison)
+        report.append("[SECTION 1] LATEST 10 CANDLES (Compare with TradingView)")
+        report.append("-" * 45)
+        report.append(f"{'Time':<18} {'Open':<12} {'High':<12} {'Low':<12} {'Close':<12} {'RSI':<6}")
+        report.append("-" * 45)
+        
+        for i in range(-10, 0):
+            row = df.iloc[i]
+            ts = row['timestamp'].strftime('%Y-%m-%d %H:%M')
+            rsi = f"{row['rsi']:.1f}" if not pd.isna(row['rsi']) else "N/A"
+            
+            # Format price based on magnitude
+            def fmt_price(p):
+                if p >= 1000:
+                    return f"{p:.2f}"
+                elif p >= 1:
+                    return f"{p:.4f}"
+                else:
+                    return f"{p:.6f}"
+            
+            report.append(f"{ts:<18} {fmt_price(row['open']):<12} {fmt_price(row['high']):<12} {fmt_price(row['low']):<12} {fmt_price(row['close']):<12} {rsi:<6}")
+        
+        report.append("")
+        
+        # SECTION 2: Current State
+        report.append("[SECTION 2] CURRENT STATE")
+        report.append("-" * 45)
+        current = df.iloc[-1]
+        report.append(f"Current Price: ${current['close']:.6f}")
+        report.append(f"Current RSI(14): {current['rsi']:.2f}")
+        report.append(f"Candle Time: {current['timestamp']}")
+        report.append("")
+        
+        # SECTION 3: Find Swing Points
+        report.append("[SECTION 3] DETECTED SWING POINTS")
+        report.append("-" * 45)
+        
+        swing_highs = scanner.find_swing_highs(df, 3)
+        swing_lows = scanner.find_swing_lows(df, 3)
+        
+        report.append(f"Swing Highs Found: {len(swing_highs)}")
+        if swing_highs:
+            for i, sh in enumerate(swing_highs[-5:], 1):  # Last 5
+                report.append(f"  High {i}: Index={sh.index}, Price=${sh.price:.6f}, RSI={sh.rsi:.1f}, Time={sh.timestamp}")
+        
+        report.append("")
+        report.append(f"Swing Lows Found: {len(swing_lows)}")
+        if swing_lows:
+            for i, sl in enumerate(swing_lows[-5:], 1):  # Last 5
+                report.append(f"  Low {i}: Index={sl.index}, Price=${sl.price:.6f}, RSI={sl.rsi:.1f}, Time={sl.timestamp}")
+        
+        report.append("")
+        
+        # SECTION 4: Divergence Detection
+        report.append("[SECTION 4] DIVERGENCE ANALYSIS")
+        report.append("-" * 45)
+        
+        divergence = scanner.detect_divergence(df, swing_lows, swing_highs)
+        
+        if divergence:
+            report.append(f"[FOUND] {divergence.divergence_type.value.upper()}")
+            report.append("")
+            report.append("Swing 1 (Earlier):")
+            report.append(f"  Index: {divergence.swing1.index}")
+            report.append(f"  Time: {divergence.swing1.timestamp}")
+            report.append(f"  Price: ${divergence.swing1.price:.6f}")
+            report.append(f"  RSI: {divergence.swing1.rsi:.2f}")
+            report.append("")
+            report.append("Swing 2 (Later):")
+            report.append(f"  Index: {divergence.swing2.index}")
+            report.append(f"  Time: {divergence.swing2.timestamp}")
+            report.append(f"  Price: ${divergence.swing2.price:.6f}")
+            report.append(f"  RSI: {divergence.swing2.rsi:.2f}")
+            report.append("")
+            report.append(f"Candles Apart: {divergence.candles_apart}")
+            report.append("")
+            
+            is_bullish = "BULLISH" in divergence.divergence_type.value.upper()
+            
+            if is_bullish:
+                report.append("BULLISH DIVERGENCE LOGIC:")
+                report.append(f"  Price: Swing2 ({divergence.swing2.price:.6f}) < Swing1 ({divergence.swing1.price:.6f}) = LOWER LOW")
+                report.append(f"  RSI:   Swing2 ({divergence.swing2.rsi:.1f}) > Swing1 ({divergence.swing1.rsi:.1f}) = HIGHER LOW")
+                report.append("  => Price makes Lower Low, RSI makes Higher Low = BULLISH DIVERGENCE")
+            else:
+                report.append("BEARISH DIVERGENCE LOGIC:")
+                report.append(f"  Price: Swing2 ({divergence.swing2.price:.6f}) > Swing1 ({divergence.swing1.price:.6f}) = HIGHER HIGH")
+                report.append(f"  RSI:   Swing2 ({divergence.swing2.rsi:.1f}) < Swing1 ({divergence.swing1.rsi:.1f}) = LOWER HIGH")
+                report.append("  => Price makes Higher High, RSI makes Lower High = BEARISH DIVERGENCE")
+            
+            report.append("")
+            
+            # SECTION 5: Signal Filters
+            report.append("[SECTION 5] SIGNAL FILTERS")
+            report.append("-" * 45)
+            
+            current_idx = len(df) - 1
+            swing2_idx = divergence.swing2.index
+            
+            # Recency
+            candles_since = current_idx - swing2_idx
+            max_allowed = MAX_CANDLES_SINCE_SWING2.get(timeframe, 10)
+            recency_pass = candles_since <= max_allowed
+            report.append(f"Recency: {candles_since} candles since Swing2 (max: {max_allowed}) {'[PASS]' if recency_pass else '[FAIL]'}")
+            
+            # Price Movement
+            move_pct = abs(current['close'] - divergence.swing2.price) / divergence.swing2.price * 100
+            movement_pass = move_pct <= 15
+            report.append(f"Price Move: {move_pct:.2f}% since Swing2 (max: 15%) {'[PASS]' if movement_pass else '[FAIL]'}")
+            
+            # 2-Candle Confirmation
+            confirmation = scanner.check_2_candle_confirmation(df, is_bullish, swing2_idx)
+            report.append(f"2-Candle Confirm: RSI {confirmation.rsi_rising_count}/2, Price {confirmation.price_rising_count}/2 {'[PASS]' if confirmation.is_confirmed else '[FAIL]'}")
+            
+            if confirmation.rsi_values:
+                report.append(f"  Candle 1 RSI: {confirmation.rsi_values[0]:.1f}")
+                report.append(f"  Candle 2 RSI: {confirmation.rsi_values[1]:.1f}")
+            
+            # ADX/Momentum
+            momentum = scanner.check_momentum_with_adx(df, is_bullish)
+            report.append(f"ADX: {momentum.adx_value:.1f} - {momentum.adx_direction}")
+            report.append(f"RSI Trend: {momentum.rsi_direction}")
+            report.append(f"Price Trend: {momentum.price_direction}")
+            
+            report.append("")
+            
+            # SECTION 6: Final Verdict
+            report.append("[SECTION 6] FINAL VERDICT")
+            report.append("-" * 45)
+            
+            all_pass = recency_pass and movement_pass and confirmation.is_confirmed
+            
+            if all_pass:
+                # Calculate confidence
+                base_conf = 0.75
+                if confirmation.is_confirmed:
+                    base_conf += 0.10
+                if momentum.adx_value > 25:
+                    base_conf += 0.05
+                
+                report.append(f"[SIGNAL VALID]")
+                report.append(f"Confidence: {base_conf * 100:.0f}%")
+                report.append(f"Direction: {'LONG' if is_bullish else 'SHORT'}")
+            else:
+                report.append("[NO SIGNAL - Filters not passed]")
+                if not recency_pass:
+                    report.append("  - Swing2 too old")
+                if not movement_pass:
+                    report.append("  - Price moved too much")
+                if not confirmation.is_confirmed:
+                    report.append("  - 2-candle confirmation failed")
+        else:
+            report.append("[NO DIVERGENCE DETECTED]")
+            report.append("")
+            report.append("Reasons could be:")
+            report.append("- No valid swing point pairs")
+            report.append("- Swing points too close (<5 candles)")
+            report.append("- Pattern invalidated by middle candles")
+            report.append("- RSI pattern broken between swings")
+        
+        report.append("")
+        report.append("=" * 45)
+        report.append("HOW TO VERIFY ON TRADINGVIEW:")
+        report.append("=" * 45)
+        report.append("1. Open the TradingView link above")
+        report.append("2. Add RSI indicator (Settings: Length=14)")
+        report.append("3. Check the candle times match exactly")
+        report.append("4. Draw lines connecting the swing points")
+        report.append("5. Verify price/RSI divergence visually")
+        report.append("")
+        
+        # Import pandas for the report
+        import pandas as pd
+        
+        # Send report
+        full_report = "\n".join(report)
+        
+        # Split if too long
+        if len(full_report) > 4000:
+            chunks = [full_report[i:i+4000] for i in range(0, len(full_report), 4000)]
+            for chunk in chunks:
+                await update.message.reply_text(f"```\n{chunk}\n```", parse_mode='Markdown')
+                await asyncio.sleep(0.3)
+        else:
+            await update.message.reply_text(f"```\n{full_report}\n```", parse_mode='Markdown')
+        
+        # Also send clickable TradingView link
+        await update.message.reply_text(f"[Open TradingView Chart]({tv_link})", parse_mode='Markdown')
+        
+    except Exception as e:
+        import traceback
+        await update.message.reply_text(f"Error: {e}\n\n{traceback.format_exc()[:1000]}")
+
+
 async def debug_raw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Raw data debug - shows actual API responses"""
     await update.message.reply_text("*Fetching Raw Data from Bybit...*", parse_mode='Markdown')
@@ -488,6 +733,7 @@ def main():
     app.add_handler(CommandHandler("coins", show_coins))
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(CommandHandler("debugraw", debug_raw))
+    app.add_handler(CommandHandler("verify", verify_signal))
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
