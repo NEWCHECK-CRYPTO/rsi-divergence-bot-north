@@ -9,7 +9,7 @@ EXCHANGE = "bybit"
 TIMEZONE = "Asia/Colombo"
 
 SYMBOLS = []
-TOP_COINS_COUNT = 150
+TOP_COINS_COUNT = 100
 QUOTE_CURRENCY = "USDT"
 
 EXCLUDED_SYMBOLS = [
@@ -19,45 +19,14 @@ EXCLUDED_SYMBOLS = [
 
 EXCLUDE_LEVERAGED = True
 
-SCAN_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
-
-TREND_CONFIRMATION_MAP = {
-    "1M": "1d",
-    "1w": "4h",
-    "1d": "1h",
-    "4h": "15m",
-    "1h": "5m",
-    "15m": "5m",
-}
-
-TIMEFRAME_CONFIRMATION_MAP = TREND_CONFIRMATION_MAP
-
-LOOKBACK_CANDLES = 80
-MIN_SWING_DISTANCE = 7
-MIN_PRICE_MOVE_PCT = 0.3
-SWING_STRENGTH_BARS = 3
-
-CONFIRMATION_CANDLES = 2
-CONFIRMATION_THRESHOLD = 1
-
-MIN_CONFIDENCE = 0.65
-
-MAX_CANDLES_SINCE_SWING2 = {
-    "15m": 12,
-    "1h": 12,
-    "4h": 10,
-    "1d": 7,
-    "1w": 5,
-    "1M": 3,
-}
-
-MIN_ADX_STRONG = 22
-MIN_ADX_MODERATE = 17
+# Scan timeframes - includes all major timeframes
+SCAN_TIMEFRAMES = ["1h", "4h", "1d", "1w", "1M"]
 
 RSI_PERIOD = 14
 
-ALERT_COOLDOWN = 1200
-SCAN_INTERVAL = 90
+ALERT_COOLDOWN = 1800  # 30 minutes cooldown per symbol/timeframe
+SCAN_INTERVAL = 120    # Scan every 2 minutes
 
-RAG_KNOWLEDGE_PATH = "rsi_divergence_ms_rag.json"
-GEMINI_MODEL = "gemini-1.5-flash"
+# Legacy settings (kept for compatibility but not used in simplified version)
+LOOKBACK_CANDLES = 200
+SWING_STRENGTH_BARS = 2

@@ -52,11 +52,19 @@ SL_TZ = pytz.timezone(TIMEZONE)
 # SIMPLIFIED CONDITIONS - EASY TO UNDERSTAND
 # =============================================================================
 
-# Swing Detection
-SWING_STRENGTH = 3  # Candles on each side to confirm swing
+# Swing Detection - Strength per Timeframe
+# Most professional traders use 2 for optimal balance
+SWING_STRENGTH_MAP = {
+    "1h": 2,
+    "4h": 2,
+    "1d": 2,
+    "1w": 2,
+    "1M": 2,
+}
+SWING_STRENGTH = 2  # Default fallback
 
 # Divergence Requirements
-MIN_SWING_DISTANCE = 5   # Minimum candles between swings
+MIN_SWING_DISTANCE = 3   # Minimum candles between swings (catch fast reversals)
 MAX_SWING_DISTANCE = 50  # Maximum candles between swings
 
 # RSI Extreme Zones (KEY FILTER)
@@ -362,13 +370,13 @@ class DivergenceScanner:
             print(f"Error fetching {symbol} {timeframe}: {e}")
             return None
     
-    def find_swing_lows(self, df: pd.DataFrame) -> List[SwingPoint]:
+    def find_swing_lows(self, df: pd.DataFrame, timeframe: str = "4h") -> List[SwingPoint]:
         """
         Find swing low points using CLOSE price
         A swing low is a candle with lower CLOSE than surrounding candles
         """
         swings = []
-        strength = SWING_STRENGTH
+        strength = SWING_STRENGTH_MAP.get(timeframe, SWING_STRENGTH)
         
         for i in range(strength, len(df) - strength):
             is_swing_low = True
@@ -390,13 +398,13 @@ class DivergenceScanner:
         
         return swings
     
-    def find_swing_highs(self, df: pd.DataFrame) -> List[SwingPoint]:
+    def find_swing_highs(self, df: pd.DataFrame, timeframe: str = "4h") -> List[SwingPoint]:
         """
         Find swing high points using CLOSE price
         A swing high is a candle with higher CLOSE than surrounding candles
         """
         swings = []
-        strength = SWING_STRENGTH
+        strength = SWING_STRENGTH_MAP.get(timeframe, SWING_STRENGTH)
         
         for i in range(strength, len(df) - strength):
             is_swing_high = True
@@ -459,7 +467,7 @@ class DivergenceScanner:
         
         return True, "Pattern intact"
     
-    def detect_divergences(self, symbol: str, df: pd.DataFrame) -> List[AlertSignal]:
+    def detect_divergences(self, symbol: str, df: pd.DataFrame, timeframe: str = "4h") -> List[AlertSignal]:
         """
         Main divergence detection - SIMPLIFIED
         
@@ -469,8 +477,8 @@ class DivergenceScanner:
         signals = []
         current_idx = len(df) - 1
         
-        swing_lows = self.find_swing_lows(df)
-        swing_highs = self.find_swing_highs(df)
+        swing_lows = self.find_swing_lows(df, timeframe)
+        swing_highs = self.find_swing_highs(df, timeframe)
         
         # === BULLISH DIVERGENCES ===
         for i in range(len(swing_lows) - 1):
@@ -628,7 +636,7 @@ class DivergenceScanner:
         if df is None or len(df) < 50:
             return []
         
-        signals = self.detect_divergences(symbol, df)
+        signals = self.detect_divergences(symbol, df, timeframe)
         
         for signal in signals:
             signal.timeframe = timeframe
