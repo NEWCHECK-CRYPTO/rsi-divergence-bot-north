@@ -103,27 +103,32 @@ Time: {format_sl_time()}"""
 
 async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current conditions"""
-    msg = f"""*📋 Signal Conditions*
+    msg = f"""*📋 Signal Conditions (CLOSE-based)*
+
+*Why CLOSE prices?*
+• RSI is calculated from CLOSE
+• Matches most TradingView indicators
+• Ignores wick noise
 
 *For BULLISH Divergence:*
-1. Find Swing LOW (lowest point with {SWING_STRENGTH} higher candles on each side)
-2. Price makes LOWER LOW (Swing2 price < Swing1 price)
+1. Find Swing LOW (lowest CLOSE with {SWING_STRENGTH} higher closes on each side)
+2. Price makes LOWER LOW (Swing2 close < Swing1 close)
 3. RSI makes HIGHER LOW (Swing2 RSI > Swing1 RSI)
 4. RSI is OVERSOLD (< {RSI_OVERSOLD})
 5. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
 6. Pattern NOT invalidated between swings:
-   • No candle LOW below Swing2 LOW
+   • No candle CLOSE below Swing2 CLOSE
    • No candle RSI below Swing1 RSI
 7. Swing2 formed within last {MAX_CANDLES_SINCE_SWING2} candles
 
 *For BEARISH Divergence:*
-1. Find Swing HIGH (highest point with {SWING_STRENGTH} lower candles on each side)
-2. Price makes HIGHER HIGH (Swing2 price > Swing1 price)
+1. Find Swing HIGH (highest CLOSE with {SWING_STRENGTH} lower closes on each side)
+2. Price makes HIGHER HIGH (Swing2 close > Swing1 close)
 3. RSI makes LOWER HIGH (Swing2 RSI < Swing1 RSI)
 4. RSI is OVERBOUGHT (> {RSI_OVERBOUGHT})
 5. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
 6. Pattern NOT invalidated between swings:
-   • No candle HIGH above Swing2 HIGH
+   • No candle CLOSE above Swing2 CLOSE
    • No candle RSI above Swing1 RSI
 7. Swing2 formed within last {MAX_CANDLES_SINCE_SWING2} candles
 
@@ -560,13 +565,13 @@ async def debug_swings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show candle data for the month
         report.append(f"[CANDLE DATA FOR MONTH {month}]")
         report.append("-" * 55)
-        report.append(f"{'Date':<12} {'Low':<12} {'High':<12} {'Close':<12} {'RSI':<6}")
+        report.append(f"{'Date':<12} {'Close':<12} {'RSI':<8} {'(High)':<12} {'(Low)':<12}")
         report.append("-" * 55)
         
         for _, row in month_df.iterrows():
             date_str = row['timestamp'].strftime('%m-%d')
             rsi_str = f"{row['rsi']:.1f}" if not pd.isna(row['rsi']) else "N/A"
-            report.append(f"{date_str:<12} ${row['low']:<11.2f} ${row['high']:<11.2f} ${row['close']:<11.2f} {rsi_str:<6}")
+            report.append(f"{date_str:<12} ${row['close']:<11.2f} {rsi_str:<8} ${row['high']:<11.2f} ${row['low']:<11.2f}")
         
         report.append("")
         report.append(f"[SWING LOWS DETECTED IN MONTH {month}]")

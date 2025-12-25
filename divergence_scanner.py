@@ -2,23 +2,29 @@
 RSI Divergence Bot - SIMPLIFIED VERSION (Option C)
 ==================================================
 Simple & Proven approach:
-- Detect divergence pattern
+- Detect divergence pattern using CLOSE prices
 - RSI must be in extreme zone
 - Alert immediately when Swing 2 forms
 - No confirmation candles - let trader decide entry
 
+WHY CLOSE PRICES?
+- RSI is calculated from CLOSE prices
+- More consistent comparison
+- Matches most TradingView indicators
+- Ignores wick noise
+
 CONDITIONS FOR VALID SIGNAL:
-1. Valid swing points detected (strength = 3 candles each side)
+1. Valid swing points detected (strength = 3 candles each side, using CLOSE)
 2. Divergence pattern exists:
-   - BULLISH: Price Lower Low + RSI Higher Low
-   - BEARISH: Price Higher High + RSI Lower High
+   - BULLISH: Price Lower Low + RSI Higher Low (CLOSE prices)
+   - BEARISH: Price Higher High + RSI Lower High (CLOSE prices)
 3. Swing 2 RSI in extreme zone:
    - BULLISH: RSI < 40 (oversold territory)
    - BEARISH: RSI > 60 (overbought territory)
 4. Swings are 5-50 candles apart
 5. Pattern not invalidated between swings:
-   - BULLISH: No price below Swing2 AND no RSI below Swing1
-   - BEARISH: No price above Swing2 AND no RSI above Swing1
+   - BULLISH: No CLOSE below Swing2 AND no RSI below Swing1
+   - BEARISH: No CLOSE above Swing2 AND no RSI above Swing1
 6. Swing 2 is recent (within last 3 candles = just formed)
 """
 
@@ -356,23 +362,27 @@ class DivergenceScanner:
             return None
     
     def find_swing_lows(self, df: pd.DataFrame) -> List[SwingPoint]:
-        """Find swing low points - LOW must be lower than surrounding candles"""
+        """
+        Find swing low points using CLOSE price
+        A swing low is a candle with lower CLOSE than surrounding candles
+        """
         swings = []
         strength = SWING_STRENGTH
         
         for i in range(strength, len(df) - strength):
             is_swing_low = True
             
+            # Check if this candle's CLOSE is lower than surrounding candles' CLOSE
             for j in range(1, strength + 1):
-                if df['low'].iloc[i] >= df['low'].iloc[i - j] or \
-                   df['low'].iloc[i] >= df['low'].iloc[i + j]:
+                if df['close'].iloc[i] >= df['close'].iloc[i - j] or \
+                   df['close'].iloc[i] >= df['close'].iloc[i + j]:
                     is_swing_low = False
                     break
             
             if is_swing_low and not pd.isna(df['rsi'].iloc[i]):
                 swings.append(SwingPoint(
                     index=i,
-                    price=df['low'].iloc[i],
+                    price=df['close'].iloc[i],  # Use CLOSE for swing lows
                     rsi=df['rsi'].iloc[i],
                     timestamp=df['timestamp'].iloc[i]
                 ))
@@ -380,23 +390,27 @@ class DivergenceScanner:
         return swings
     
     def find_swing_highs(self, df: pd.DataFrame) -> List[SwingPoint]:
-        """Find swing high points - HIGH must be higher than surrounding candles"""
+        """
+        Find swing high points using CLOSE price
+        A swing high is a candle with higher CLOSE than surrounding candles
+        """
         swings = []
         strength = SWING_STRENGTH
         
         for i in range(strength, len(df) - strength):
             is_swing_high = True
             
+            # Check if this candle's CLOSE is higher than surrounding candles' CLOSE
             for j in range(1, strength + 1):
-                if df['high'].iloc[i] <= df['high'].iloc[i - j] or \
-                   df['high'].iloc[i] <= df['high'].iloc[i + j]:
+                if df['close'].iloc[i] <= df['close'].iloc[i - j] or \
+                   df['close'].iloc[i] <= df['close'].iloc[i + j]:
                     is_swing_high = False
                     break
             
             if is_swing_high and not pd.isna(df['rsi'].iloc[i]):
                 swings.append(SwingPoint(
                     index=i,
-                    price=df['high'].iloc[i],
+                    price=df['close'].iloc[i],  # Use CLOSE for swing highs
                     rsi=df['rsi'].iloc[i],
                     timestamp=df['timestamp'].iloc[i]
                 ))
@@ -407,13 +421,14 @@ class DivergenceScanner:
                                 swing2: SwingPoint, is_bullish: bool) -> Tuple[bool, str]:
         """
         Check if pattern is not broken by middle candles
+        Using CLOSE prices for consistency with swing detection
         
         For BULLISH:
-        - No candle LOW should go below Swing2 LOW (price invalidation)
+        - No candle CLOSE should go below Swing2 CLOSE (price invalidation)
         - No candle RSI should go below Swing1 RSI (RSI invalidation)
         
         For BEARISH:
-        - No candle HIGH should go above Swing2 HIGH (price invalidation)
+        - No candle CLOSE should go above Swing2 CLOSE (price invalidation)
         - No candle RSI should go above Swing1 RSI (RSI invalidation)
         """
         start_idx = swing1.index + 1
@@ -425,10 +440,10 @@ class DivergenceScanner:
         middle = df.iloc[start_idx:end_idx]
         
         if is_bullish:
-            # PRICE CHECK: No lower low than Swing2
-            min_low = middle['low'].min()
-            if min_low < swing2.price:
-                return False, f"Price invalid: Lower low ${min_low:.2f} < Swing2 ${swing2.price:.2f}"
+            # PRICE CHECK: No lower close than Swing2
+            min_close = middle['close'].min()
+            if min_close < swing2.price:
+                return False, f"Price invalid: Close ${min_close:.2f} < Swing2 ${swing2.price:.2f}"
             
             # RSI CHECK: No RSI should go below Swing1 RSI
             min_rsi = middle['rsi'].min()
@@ -436,10 +451,10 @@ class DivergenceScanner:
                 return False, f"RSI invalid: RSI {min_rsi:.1f} dropped below Swing1 RSI {swing1.rsi:.1f}"
         
         else:  # Bearish
-            # PRICE CHECK: No higher high than Swing2
-            max_high = middle['high'].max()
-            if max_high > swing2.price:
-                return False, f"Price invalid: Higher high ${max_high:.2f} > Swing2 ${swing2.price:.2f}"
+            # PRICE CHECK: No higher close than Swing2
+            max_close = middle['close'].max()
+            if max_close > swing2.price:
+                return False, f"Price invalid: Close ${max_close:.2f} > Swing2 ${swing2.price:.2f}"
             
             # RSI CHECK: No RSI should go above Swing1 RSI
             max_rsi = middle['rsi'].max()
