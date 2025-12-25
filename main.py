@@ -503,6 +503,126 @@ Time: {format_sl_time()}"""
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 
+async def debug_swings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Debug swing points around a specific date"""
+    args = context.args
+    
+    if not args or len(args) < 3:
+        await update.message.reply_text(
+            "*Debug Swing Points*\n\n"
+            "Usage: `/debug_swings SYMBOL TIMEFRAME MONTH`\n\n"
+            "Examples:\n"
+            "`/debug_swings SOL/USDT 1d 09`  (September)\n"
+            "`/debug_swings BTC/USDT 4h 12`  (December)\n\n"
+            "Shows all swing points and candle data for that month.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    symbol = args[0].upper()
+    if '/' not in symbol:
+        symbol = symbol + '/USDT'
+    
+    timeframe = args[1].lower()
+    month = args[2]
+    
+    await update.message.reply_text(f"*Debugging {symbol} {timeframe} for month {month}...*", parse_mode='Markdown')
+    
+    try:
+        df = scanner.fetch_ohlcv(symbol, timeframe, limit=1000)
+        
+        if df is None:
+            await update.message.reply_text("❌ Could not fetch data")
+            return
+        
+        # Filter for the month
+        df['month'] = df['timestamp'].dt.strftime('%m')
+        month_df = df[df['month'] == month].copy()
+        
+        if len(month_df) == 0:
+            await update.message.reply_text(f"❌ No data found for month {month}")
+            return
+        
+        # Get all swing points
+        swing_lows = scanner.find_swing_lows(df)
+        swing_highs = scanner.find_swing_highs(df)
+        
+        # Filter swings for the month
+        swing_lows_month = [s for s in swing_lows if s.timestamp.strftime('%m') == month]
+        swing_highs_month = [s for s in swing_highs if s.timestamp.strftime('%m') == month]
+        
+        report = []
+        report.append("=" * 55)
+        report.append(f"DEBUG: {symbol} {timeframe} - Month {month}")
+        report.append("=" * 55)
+        report.append("")
+        
+        # Show candle data for the month
+        report.append(f"[CANDLE DATA FOR MONTH {month}]")
+        report.append("-" * 55)
+        report.append(f"{'Date':<12} {'Low':<12} {'High':<12} {'Close':<12} {'RSI':<6}")
+        report.append("-" * 55)
+        
+        for _, row in month_df.iterrows():
+            date_str = row['timestamp'].strftime('%m-%d')
+            rsi_str = f"{row['rsi']:.1f}" if not pd.isna(row['rsi']) else "N/A"
+            report.append(f"{date_str:<12} ${row['low']:<11.2f} ${row['high']:<11.2f} ${row['close']:<11.2f} {rsi_str:<6}")
+        
+        report.append("")
+        report.append(f"[SWING LOWS DETECTED IN MONTH {month}]")
+        report.append("-" * 55)
+        
+        if swing_lows_month:
+            for sl in swing_lows_month:
+                report.append(f"  {sl.timestamp.strftime('%m-%d')} | Price: ${sl.price:.2f} | RSI: {sl.rsi:.1f} | Index: {sl.index}")
+        else:
+            report.append("  No swing lows detected")
+        
+        report.append("")
+        report.append(f"[SWING HIGHS DETECTED IN MONTH {month}]")
+        report.append("-" * 55)
+        
+        if swing_highs_month:
+            for sh in swing_highs_month:
+                report.append(f"  {sh.timestamp.strftime('%m-%d')} | Price: ${sh.price:.2f} | RSI: {sh.rsi:.1f} | Index: {sh.index}")
+        else:
+            report.append("  No swing highs detected")
+        
+        report.append("")
+        report.append(f"[ALL SWING LOWS - Last 20]")
+        report.append("-" * 55)
+        for sl in swing_lows[-20:]:
+            report.append(f"  {sl.timestamp.strftime('%Y-%m-%d')} | ${sl.price:.2f} | RSI: {sl.rsi:.1f}")
+        
+        report.append("")
+        report.append(f"[ALL SWING HIGHS - Last 20]")
+        report.append("-" * 55)
+        for sh in swing_highs[-20:]:
+            report.append(f"  {sh.timestamp.strftime('%Y-%m-%d')} | ${sh.price:.2f} | RSI: {sh.rsi:.1f}")
+        
+        # Send report
+        full_report = "\n".join(report)
+        chunks = []
+        current_chunk = ""
+        
+        for line in report:
+            if len(current_chunk) + len(line) + 1 > 3900:
+                chunks.append(current_chunk)
+                current_chunk = line + "\n"
+            else:
+                current_chunk += line + "\n"
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        for chunk in chunks:
+            await update.message.reply_text(f"```\n{chunk}\n```", parse_mode='Markdown')
+            await asyncio.sleep(0.5)
+        
+    except Exception as e:
+        import traceback
+        await update.message.reply_text(f"❌ Error: {e}\n\n{traceback.format_exc()[:500]}")
+
+
 def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     logger.info(f"[{format_sl_time()}] Web server started")
@@ -520,6 +640,7 @@ def main():
     app.add_handler(CommandHandler("verify", verify))
     app.add_handler(CommandHandler("conditions", conditions))
     app.add_handler(CommandHandler("debug", debug))
+    app.add_handler(CommandHandler("debug_swings", debug_swings))
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
