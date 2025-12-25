@@ -19,16 +19,17 @@ EXCLUDED_SYMBOLS = [
 
 EXCLUDE_LEVERAGED = True
 
-# Optimized timeframes
-SCAN_TIMEFRAMES = ["1h", "4h", "1d"]
+# V10: Optimized timeframes (added 15m for testing)
+SCAN_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
 
-# Multi-timeframe trend confirmation mapping
+# V10: Multi-timeframe trend confirmation mapping
 TREND_CONFIRMATION_MAP = {
     "1M": "1d",
     "1w": "4h",
     "1d": "1h",
     "4h": "15m",
     "1h": "5m",
+    "15m": "1m",
 }
 
 # Alias for backward compatibility
@@ -39,15 +40,16 @@ MIN_SWING_DISTANCE = 5
 MIN_PRICE_MOVE_PCT = 0.3
 SWING_STRENGTH_BARS = 3
 
-# 2-candle confirmation (optimal!)
+# V10: 2-candle confirmation (optimal!)
 CONFIRMATION_CANDLES = 2
 CONFIRMATION_THRESHOLD = 2  # Need both candles (2/2)
 
-# Minimum confidence (higher for reliability)
+# V10: Minimum confidence (higher for reliability)
 MIN_CONFIDENCE = 0.70
 
-# Recency check - max candles since Swing 2
+# V10: Recency check - max candles since Swing 2
 MAX_CANDLES_SINCE_SWING2 = {
+    "15m": 12,
     "1h": 10,
     "4h": 8,
     "1d": 5,
@@ -55,7 +57,7 @@ MAX_CANDLES_SINCE_SWING2 = {
     "1M": 2,
 }
 
-# Minimum ADX for trend confirmation
+# V10: Minimum ADX for trend confirmation
 MIN_ADX_STRONG = 25
 MIN_ADX_MODERATE = 20
 
