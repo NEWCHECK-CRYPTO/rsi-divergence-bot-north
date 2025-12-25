@@ -1,6 +1,6 @@
 """
-RSI Divergence Bot V11 - RELAXED VERSION
-Features: Hidden divergences, Optional MTF, Quality tiers, More signals
+RSI Divergence Bot V10 - FIXED VERSION
+Fixed: Bybit ticker fetching issue
 """
 
 import ccxt
@@ -37,12 +37,6 @@ class SignalStrength(Enum):
     STRONG = "strong"
     MEDIUM = "medium"
     EARLY = "early"
-
-
-class SignalQuality(Enum):
-    PREMIUM = "premium"
-    STANDARD = "standard"
-    EXPLORATORY = "exploratory"
 
 
 @dataclass
@@ -104,7 +98,6 @@ class AlertSignal:
     momentum: MomentumStatus
     mtf_trend: Optional[MTFTrendStatus]
     signal_strength: SignalStrength
-    signal_quality: SignalQuality
     total_confidence: float
     timestamp: datetime
     volume_rank: int
@@ -167,12 +160,14 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> float:
     low = df['low']
     close = df['close']
     
+    # True Range
     tr1 = high - low
     tr2 = abs(high - close.shift())
     tr3 = abs(low - close.shift())
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
     
+    # Directional Movement
     up_move = high - high.shift()
     down_move = low.shift() - low
     
@@ -204,15 +199,23 @@ def get_tradingview_link(symbol: str, timeframe: str) -> str:
 
 
 class DivergenceScanner:
-    """V11 Relaxed Scanner with hidden divergences and quality tiers"""
+    """V10 Complete Scanner with all features - FIXED"""
     
     def __init__(self):
-        print(f"[{format_sl_time()}] Initializing V11 Relaxed scanner...")
+        print(f"[{format_sl_time()}] Initializing V10 scanner...")
         
+        # Initialize exchange
         if EXCHANGE.lower() == "bybit":
-            self.exchange = ccxt.bybit()
+            self.exchange = ccxt.bybit({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot',  # Use spot market
+                }
+            })
         elif EXCHANGE.lower() == "binance":
-            self.exchange = ccxt.binance()
+            self.exchange = ccxt.binance({
+                'enableRateLimit': True,
+            })
         else:
             raise ValueError(f"Unsupported exchange: {EXCHANGE}")
         
@@ -221,41 +224,76 @@ class DivergenceScanner:
         self.alert_cooldowns = {}
         self.volume_ranks = {}
         
-        print(f"[{format_sl_time()}] V11 Scanner initialized ({EXCHANGE.upper()})")
+        print(f"[{format_sl_time()}] V10 Scanner initialized ({EXCHANGE.upper()})")
     
-    def fetch_top_coins_by_volume(self, count: int = 150) -> List[str]:
-        """Fetch top coins by 24h volume"""
+    def fetch_top_coins_by_volume(self, count: int = 100) -> List[str]:
+        """Fetch top coins by 24h volume - FIXED VERSION"""
         try:
-            print(f"[{format_sl_time()}] Fetching tickers from {EXCHANGE.upper()}...")
-            tickers = self.exchange.fetch_tickers()
-            print(f"[{format_sl_time()}] Received {len(tickers)} tickers")
+            print(f"[{format_sl_time()}] Fetching top coins from {EXCHANGE.upper()}...")
             
-            usdt_pairs = {
-                symbol: ticker for symbol, ticker in tickers.items()
-                if symbol.endswith(f"/{QUOTE_CURRENCY}") 
-                and symbol not in EXCLUDED_SYMBOLS
-            }
-            print(f"[{format_sl_time()}] Filtered to {len(usdt_pairs)} USDT pairs")
+            # Get all valid USDT spot markets first
+            valid_symbols = []
+            for symbol, market in self.exchange.markets.items():
+                # Only spot USDT pairs
+                if (market.get('quote') == 'USDT' and 
+                    market.get('spot', False) and 
+                    market.get('active', True) and
+                    symbol not in EXCLUDED_SYMBOLS):
+                    
+                    # Exclude leveraged tokens
+                    if EXCLUDE_LEVERAGED:
+                        base = market.get('base', '')
+                        if any(x in base for x in ['UP', 'DOWN', 'BULL', 'BEAR', '3L', '3S', '2L', '2S']):
+                            continue
+                    
+                    valid_symbols.append(symbol)
             
-            if EXCLUDE_LEVERAGED:
-                usdt_pairs = {
-                    symbol: ticker for symbol, ticker in usdt_pairs.items()
-                    if not any(x in symbol for x in ['UP/', 'DOWN/', 'BULL/', 'BEAR/', '3L/', '3S/'])
-                }
-                print(f"[{format_sl_time()}] After excluding leveraged: {len(usdt_pairs)} pairs")
+            print(f"[{format_sl_time()}] Found {len(valid_symbols)} valid USDT spot pairs")
             
+            # Fetch tickers for valid symbols only (in batches to avoid rate limits)
+            all_tickers = {}
+            batch_size = 50
+            
+            for i in range(0, len(valid_symbols), batch_size):
+                batch = valid_symbols[i:i+batch_size]
+                try:
+                    # Fetch individual tickers for each symbol
+                    for symbol in batch:
+                        try:
+                            ticker = self.exchange.fetch_ticker(symbol)
+                            if ticker and ticker.get('quoteVolume'):
+                                all_tickers[symbol] = ticker
+                        except Exception as e:
+                            # Skip symbols that fail
+                            continue
+                    
+                    time.sleep(0.1)  # Rate limit
+                except Exception as e:
+                    print(f"[{format_sl_time()}] Batch error: {e}")
+                    continue
+            
+            print(f"[{format_sl_time()}] Fetched {len(all_tickers)} tickers successfully")
+            
+            # Sort by 24h quote volume
             sorted_pairs = sorted(
-                usdt_pairs.items(),
-                key=lambda x: x[1].get('quoteVolume', 0),
+                all_tickers.items(),
+                key=lambda x: float(x[1].get('quoteVolume', 0) or 0),
                 reverse=True
             )
             
+            # Get top N
             top_symbols = [symbol for symbol, _ in sorted_pairs[:count]]
             
+            # Store volume ranks
+            self.volume_ranks = {}
             for rank, symbol in enumerate(top_symbols, 1):
                 self.volume_ranks[symbol] = rank
             
             print(f"[{format_sl_time()}] Selected top {len(top_symbols)} coins by volume")
+            
+            if top_symbols:
+                print(f"[{format_sl_time()}] Top 5: {', '.join(top_symbols[:5])}")
+            
             return top_symbols
             
         except Exception as e:
@@ -264,9 +302,127 @@ class DivergenceScanner:
             traceback.print_exc()
             return []
     
+    def fetch_top_coins_by_volume_v2(self, count: int = 100) -> List[str]:
+        """Alternative method using markets data directly"""
+        try:
+            print(f"[{format_sl_time()}] Fetching top coins (V2 method)...")
+            
+            # Reload markets to get fresh data
+            self.exchange.load_markets()
+            
+            # Get USDT spot pairs with volume info from markets
+            pairs_with_volume = []
+            
+            for symbol, market in self.exchange.markets.items():
+                if (market.get('quote') == 'USDT' and 
+                    market.get('spot', False) and 
+                    market.get('active', True) and
+                    symbol not in EXCLUDED_SYMBOLS):
+                    
+                    base = market.get('base', '')
+                    
+                    # Exclude leveraged/special tokens
+                    if EXCLUDE_LEVERAGED:
+                        if any(x in base for x in ['UP', 'DOWN', 'BULL', 'BEAR', '3L', '3S', '2L', '2S', '5L', '5S']):
+                            continue
+                    
+                    # Exclude stablecoins
+                    if base in ['USDC', 'BUSD', 'TUSD', 'DAI', 'FDUSD', 'USDD', 'USDP']:
+                        continue
+                    
+                    pairs_with_volume.append(symbol)
+            
+            print(f"[{format_sl_time()}] Found {len(pairs_with_volume)} valid pairs")
+            
+            # Now fetch volume for top pairs by fetching tickers one by one
+            # First, let's try a batch approach with error handling
+            volume_data = {}
+            
+            # Try fetching all tickers at once with proper error handling
+            try:
+                # For Bybit, we need to specify the market type
+                if EXCHANGE.lower() == "bybit":
+                    # Use the spot tickers endpoint directly
+                    tickers = self.exchange.fetch_tickers(params={'category': 'spot'})
+                    
+                    for symbol, ticker in tickers.items():
+                        if symbol in pairs_with_volume:
+                            vol = ticker.get('quoteVolume', 0)
+                            if vol:
+                                volume_data[symbol] = float(vol)
+                else:
+                    tickers = self.exchange.fetch_tickers()
+                    for symbol, ticker in tickers.items():
+                        if symbol in pairs_with_volume:
+                            vol = ticker.get('quoteVolume', 0)
+                            if vol:
+                                volume_data[symbol] = float(vol)
+                                
+            except Exception as e:
+                print(f"[{format_sl_time()}] Batch ticker fetch failed: {e}")
+                print(f"[{format_sl_time()}] Falling back to individual fetches...")
+                
+                # Fallback: fetch tickers individually for major pairs
+                major_pairs = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT',
+                              'ADA/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LINK/USDT',
+                              'SHIB/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT', 'ATOM/USDT',
+                              'XLM/USDT', 'ETC/USDT', 'FIL/USDT', 'NEAR/USDT', 'APT/USDT']
+                
+                for symbol in pairs_with_volume[:200]:  # Check first 200
+                    try:
+                        ticker = self.exchange.fetch_ticker(symbol)
+                        vol = ticker.get('quoteVolume', 0)
+                        if vol:
+                            volume_data[symbol] = float(vol)
+                        time.sleep(0.05)
+                    except:
+                        continue
+            
+            # Sort by volume
+            sorted_pairs = sorted(volume_data.items(), key=lambda x: x[1], reverse=True)
+            top_symbols = [symbol for symbol, _ in sorted_pairs[:count]]
+            
+            # Store ranks
+            self.volume_ranks = {}
+            for rank, symbol in enumerate(top_symbols, 1):
+                self.volume_ranks[symbol] = rank
+            
+            print(f"[{format_sl_time()}] Got {len(top_symbols)} coins by volume")
+            if top_symbols:
+                print(f"[{format_sl_time()}] Top 5: {', '.join(top_symbols[:5])}")
+            
+            return top_symbols
+            
+        except Exception as e:
+            print(f"[{format_sl_time()}] V2 method error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
     def get_symbols_to_scan(self) -> List[str]:
         """Get list of symbols to scan"""
-        return self.fetch_top_coins_by_volume(TOP_COINS_COUNT)
+        # Try V2 method first (more reliable for Bybit)
+        symbols = self.fetch_top_coins_by_volume_v2(TOP_COINS_COUNT)
+        
+        if not symbols:
+            # Fallback to V1 if V2 fails
+            symbols = self.fetch_top_coins_by_volume(TOP_COINS_COUNT)
+        
+        if not symbols:
+            # Ultimate fallback - use hardcoded major pairs
+            print(f"[{format_sl_time()}] Using fallback coin list...")
+            symbols = [
+                'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'DOGE/USDT',
+                'ADA/USDT', 'AVAX/USDT', 'DOT/USDT', 'MATIC/USDT', 'LINK/USDT',
+                'SHIB/USDT', 'LTC/USDT', 'BCH/USDT', 'UNI/USDT', 'ATOM/USDT',
+                'XLM/USDT', 'ETC/USDT', 'FIL/USDT', 'NEAR/USDT', 'APT/USDT',
+                'ARB/USDT', 'OP/USDT', 'INJ/USDT', 'SUI/USDT', 'SEI/USDT',
+                'TIA/USDT', 'PEPE/USDT', 'WIF/USDT', 'BONK/USDT', 'FLOKI/USDT'
+            ]
+            for rank, sym in enumerate(symbols, 1):
+                self.volume_ranks[sym] = rank
+        
+        return symbols
     
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int = 250) -> Optional[pd.DataFrame]:
         """Fetch OHLCV data and calculate RSI"""
@@ -386,7 +542,7 @@ class DivergenceScanner:
     
     def check_2_candle_confirmation(self, df: pd.DataFrame, is_bullish: bool,
                                     swing2_idx: int) -> ConfirmationStatus:
-        """2-candle confirmation - relaxed (1/2 OK)"""
+        """2-candle confirmation"""
         start_idx = swing2_idx + 1
         end_idx = swing2_idx + 3
         
@@ -418,8 +574,7 @@ class DivergenceScanner:
             rsi_rising_count = (1 if c1_rsi_falling else 0) + (1 if c2_rsi_falling else 0)
             price_rising_count = (1 if c1_price_falling else 0) + (1 if c2_price_falling else 0)
         
-        is_confirmed = (rsi_rising_count >= CONFIRMATION_THRESHOLD and 
-                       price_rising_count >= CONFIRMATION_THRESHOLD)
+        is_confirmed = (rsi_rising_count == 2 and price_rising_count == 2)
         
         return ConfirmationStatus(
             candles_checked=2,
@@ -436,26 +591,26 @@ class DivergenceScanner:
         
         if adx > MIN_ADX_STRONG:
             adx_confirmed = True
-            adx_direction = "Strong 💪"
+            adx_direction = "Strong"
         elif adx > MIN_ADX_MODERATE:
             adx_confirmed = True
-            adx_direction = "Moderate 👍"
+            adx_direction = "Moderate"
         else:
             adx_confirmed = False
-            adx_direction = "Weak ⚠️"
+            adx_direction = "Weak"
         
         rsi_values = df['rsi'].tail(5)
         rsi_rising = all(rsi_values.iloc[i] > rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         rsi_falling = all(rsi_values.iloc[i] < rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         
         if rsi_rising:
-            rsi_direction = "Rising ↗️"
+            rsi_direction = "Rising"
             rsi_confirmed = is_bullish
         elif rsi_falling:
-            rsi_direction = "Falling ↘️"
+            rsi_direction = "Falling"
             rsi_confirmed = not is_bullish
         else:
-            rsi_direction = "Sideways ↔️"
+            rsi_direction = "Sideways"
             rsi_confirmed = False
         
         price_values = df['close'].tail(5)
@@ -463,13 +618,13 @@ class DivergenceScanner:
         price_falling = all(price_values.iloc[i] < price_values.iloc[i-1] for i in range(1, len(price_values)))
         
         if price_rising:
-            price_direction = "Rising ↗️"
+            price_direction = "Rising"
             price_confirmed = is_bullish
         elif price_falling:
-            price_direction = "Falling ↘️"
+            price_direction = "Falling"
             price_confirmed = not is_bullish
         else:
-            price_direction = "Sideways ↔️"
+            price_direction = "Sideways"
             price_confirmed = False
         
         return MomentumStatus(
@@ -482,7 +637,7 @@ class DivergenceScanner:
         )
     
     def check_mtf_trend(self, symbol: str, signal_tf: str, is_bullish: bool) -> Optional[MTFTrendStatus]:
-        """Multi-timeframe trend confirmation (OPTIONAL)"""
+        """Multi-timeframe trend confirmation"""
         lower_tf = TREND_CONFIRMATION_MAP.get(signal_tf)
         if not lower_tf:
             return None
@@ -498,22 +653,22 @@ class DivergenceScanner:
         price_falling = all(price_values.iloc[i] < price_values.iloc[i-1] for i in range(1, len(price_values)))
         
         if price_rising:
-            price_trend = "Rising ↗️"
+            price_trend = "Rising"
         elif price_falling:
-            price_trend = "Falling ↘️"
+            price_trend = "Falling"
         else:
-            price_trend = "Sideways ↔️"
+            price_trend = "Sideways"
         
         rsi_values = df_lower['rsi'].tail(5)
         rsi_rising = all(rsi_values.iloc[i] > rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         rsi_falling = all(rsi_values.iloc[i] < rsi_values.iloc[i-1] for i in range(1, len(rsi_values)))
         
         if rsi_rising:
-            rsi_trend = "Rising ↗️"
+            rsi_trend = "Rising"
         elif rsi_falling:
-            rsi_trend = "Falling ↘️"
+            rsi_trend = "Falling"
         else:
-            rsi_trend = "Sideways ↔️"
+            rsi_trend = "Sideways"
         
         if adx > MIN_ADX_STRONG:
             trend_strength = "Very Strong"
@@ -523,15 +678,15 @@ class DivergenceScanner:
             trend_strength = "Weak"
         
         if is_bullish and "Rising" in price_trend:
-            trend_direction = f"{trend_strength} Up 📈"
+            trend_direction = f"{trend_strength} Up"
         elif not is_bullish and "Falling" in price_trend:
-            trend_direction = f"{trend_strength} Down 📉"
+            trend_direction = f"{trend_strength} Down"
         else:
             trend_direction = f"{trend_strength} (Conflicting)"
         
         if adx < MIN_ADX_MODERATE:
             is_confirmed = False
-            confidence_boost = -0.05
+            confidence_boost = -0.10
         elif (is_bullish and "Rising" in price_trend and "Rising" in rsi_trend):
             is_confirmed = True
             confidence_boost = +0.15
@@ -555,23 +710,24 @@ class DivergenceScanner:
             confidence_boost=confidence_boost
         )
     
-    def detect_all_divergences(self, df: pd.DataFrame, swing_lows: List[SwingPoint],
-                              swing_highs: List[SwingPoint]) -> Optional[Divergence]:
-        """Detect ALL divergence types (regular + hidden)"""
+    def detect_divergence(self, df: pd.DataFrame, swing_lows: List[SwingPoint],
+                          swing_highs: List[SwingPoint]) -> Optional[Divergence]:
+        """Detect divergences with all checks"""
         
-        # 1. BULLISH REGULAR
+        # Check bullish regular
         if len(swing_lows) >= 2:
             for i in range(len(swing_lows) - 1):
                 swing1 = swing_lows[i]
                 swing2 = swing_lows[i + 1]
                 
                 candles_apart = swing2.index - swing1.index
-                if candles_apart < MIN_SWING_DISTANCE or candles_apart > LOOKBACK_CANDLES:
+                if candles_apart < MIN_SWING_DISTANCE or candles_apart > 50:
                     continue
                 
                 if swing2.price < swing1.price and swing2.rsi > swing1.rsi:
                     if not self.check_price_invalidation(df, swing1, swing2, True):
                         continue
+                    
                     if not self.check_rsi_invalidation(df, swing1, swing2, True):
                         continue
                     
@@ -585,45 +741,20 @@ class DivergenceScanner:
                         confidence=0.75
                     )
         
-        # 2. BULLISH HIDDEN
-        if len(swing_lows) >= 2:
-            for i in range(len(swing_lows) - 1):
-                swing1 = swing_lows[i]
-                swing2 = swing_lows[i + 1]
-                
-                candles_apart = swing2.index - swing1.index
-                if candles_apart < MIN_SWING_DISTANCE or candles_apart > LOOKBACK_CANDLES:
-                    continue
-                
-                if swing2.price > swing1.price and swing2.rsi < swing1.rsi:
-                    if not self.check_price_invalidation(df, swing1, swing2, True):
-                        continue
-                    if not self.check_rsi_invalidation(df, swing1, swing2, True):
-                        continue
-                    
-                    return Divergence(
-                        divergence_type=DivergenceType.BULLISH_HIDDEN,
-                        swing1=swing1,
-                        swing2=swing2,
-                        current_price=df['close'].iloc[-1],
-                        current_rsi=df['rsi'].iloc[-1],
-                        candles_apart=candles_apart,
-                        confidence=0.70
-                    )
-        
-        # 3. BEARISH REGULAR
+        # Check bearish regular
         if len(swing_highs) >= 2:
             for i in range(len(swing_highs) - 1):
                 swing1 = swing_highs[i]
                 swing2 = swing_highs[i + 1]
                 
                 candles_apart = swing2.index - swing1.index
-                if candles_apart < MIN_SWING_DISTANCE or candles_apart > LOOKBACK_CANDLES:
+                if candles_apart < MIN_SWING_DISTANCE or candles_apart > 50:
                     continue
                 
                 if swing2.price > swing1.price and swing2.rsi < swing1.rsi:
                     if not self.check_price_invalidation(df, swing1, swing2, False):
                         continue
+                    
                     if not self.check_rsi_invalidation(df, swing1, swing2, False):
                         continue
                     
@@ -635,32 +766,6 @@ class DivergenceScanner:
                         current_rsi=df['rsi'].iloc[-1],
                         candles_apart=candles_apart,
                         confidence=0.75
-                    )
-        
-        # 4. BEARISH HIDDEN
-        if len(swing_highs) >= 2:
-            for i in range(len(swing_highs) - 1):
-                swing1 = swing_highs[i]
-                swing2 = swing_highs[i + 1]
-                
-                candles_apart = swing2.index - swing1.index
-                if candles_apart < MIN_SWING_DISTANCE or candles_apart > LOOKBACK_CANDLES:
-                    continue
-                
-                if swing2.price < swing1.price and swing2.rsi > swing1.rsi:
-                    if not self.check_price_invalidation(df, swing1, swing2, False):
-                        continue
-                    if not self.check_rsi_invalidation(df, swing1, swing2, False):
-                        continue
-                    
-                    return Divergence(
-                        divergence_type=DivergenceType.BEARISH_HIDDEN,
-                        swing1=swing1,
-                        swing2=swing2,
-                        current_price=df['close'].iloc[-1],
-                        current_rsi=df['rsi'].iloc[-1],
-                        candles_apart=candles_apart,
-                        confidence=0.70
                     )
         
         return None
@@ -679,7 +784,7 @@ class DivergenceScanner:
         self.alert_cooldowns[key] = time.time()
     
     def scan_symbol(self, symbol: str, timeframe: str) -> List[AlertSignal]:
-        """V11 Complete scan with optional MTF and quality tiers"""
+        """Complete scan with all filters"""
         alerts = []
         
         if self._is_on_cooldown(symbol, timeframe):
@@ -692,7 +797,7 @@ class DivergenceScanner:
         swing_highs = self.find_swing_highs(df, SWING_STRENGTH_BARS)
         swing_lows = self.find_swing_lows(df, SWING_STRENGTH_BARS)
         
-        divergence = self.detect_all_divergences(df, swing_lows, swing_highs)
+        divergence = self.detect_divergence(df, swing_lows, swing_highs)
         
         if not divergence:
             return alerts
@@ -701,21 +806,29 @@ class DivergenceScanner:
         current_idx = len(df) - 1
         swing2_idx = divergence.swing2.index
         
+        # Filter 1: Recency check
         if not self.check_recency(current_idx, swing2_idx, timeframe):
             return alerts
         
+        # Filter 2: Price movement check
         movement_ok, move_pct = self.check_price_movement(divergence.current_price, divergence.swing2.price)
         if not movement_ok:
             return alerts
         
+        # Filter 3: 2-candle confirmation
         confirmation = self.check_2_candle_confirmation(df, is_bullish, swing2_idx)
         if not confirmation.is_confirmed:
             return alerts
         
+        # Filter 4: Momentum check (ADX)
         momentum = self.check_momentum_with_adx(df, is_bullish)
         
+        # Filter 5: MTF trend check
         mtf_trend = self.check_mtf_trend(symbol, timeframe, is_bullish)
+        if mtf_trend and not mtf_trend.is_confirmed:
+            return alerts
         
+        # Calculate final confidence
         base_confidence = divergence.confidence
         
         if confirmation.is_confirmed:
@@ -732,14 +845,12 @@ class DivergenceScanner:
         if final_confidence < MIN_CONFIDENCE:
             return alerts
         
+        # Determine signal strength
         if final_confidence >= 0.85:
-            quality = SignalQuality.PREMIUM
             strength = SignalStrength.STRONG
-        elif final_confidence >= 0.70:
-            quality = SignalQuality.STANDARD
+        elif final_confidence >= 0.75:
             strength = SignalStrength.MEDIUM
         else:
-            quality = SignalQuality.EXPLORATORY
             strength = SignalStrength.EARLY
         
         self._set_cooldown(symbol, timeframe)
@@ -752,7 +863,6 @@ class DivergenceScanner:
             momentum=momentum,
             mtf_trend=mtf_trend,
             signal_strength=strength,
-            signal_quality=quality,
             total_confidence=final_confidence,
             timestamp=get_sl_time(),
             volume_rank=self.volume_ranks.get(symbol, 999),
@@ -783,56 +893,43 @@ class DivergenceScanner:
 
 
 class AlertFormatter:
-    """Format V11 alerts for Telegram"""
+    """Format alerts for Telegram"""
     
     @staticmethod
     def format_alert(alert: AlertSignal) -> str:
-        """Format complete V11 alert with quality tiers"""
+        """Format complete alert"""
         div = alert.divergence
         is_bull = "BULLISH" in div.divergence_type.value.upper()
         
-        if alert.signal_quality == SignalQuality.PREMIUM:
-            quality_emoji = "💎"
-            quality_label = "PREMIUM"
-        elif alert.signal_quality == SignalQuality.STANDARD:
-            quality_emoji = "⭐"
-            quality_label = "STANDARD"
-        else:
-            quality_emoji = "🔍"
-            quality_label = "EXPLORATORY"
-        
+        # Strength
         if alert.signal_strength == SignalStrength.STRONG:
-            emoji, label = "🟢", "STRONG"
+            emoji, label = "[STRONG]", "STRONG"
         elif alert.signal_strength == SignalStrength.MEDIUM:
-            emoji, label = "🟡", "MEDIUM"
+            emoji, label = "[MEDIUM]", "MEDIUM"
         else:
-            emoji, label = "🔴", "EARLY"
+            emoji, label = "[EARLY]", "EARLY"
         
-        direction = "BULLISH 📈" if is_bull else "BEARISH 📉"
+        direction = "BULLISH (UP)" if is_bull else "BEARISH (DOWN)"
         
+        # Format prices
         def fmt(p):
             return f"${p:,.2f}" if p >= 1 else f"${p:.6f}"
         
+        # Confirmation
         conf = alert.confirmation
-        conf_emoji = "✅" if conf.is_confirmed else "⏳"
-        conf_text = f"2-Candle: RSI:{conf.rsi_rising_count}/2 Price:{conf.price_rising_count}/2"
+        conf_text = f"2-Candle: RSI {conf.rsi_rising_count}/2, Price {conf.price_rising_count}/2"
         
+        # MTF Trend
         mtf = alert.mtf_trend
         if mtf:
-            adx_emoji = "✅" if mtf.adx > MIN_ADX_MODERATE else "⚠️"
-            mtf_section = f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔍 Lower TF Trend ({mtf.confirmation_tf.upper()}):
-{adx_emoji} Trend: {mtf.trend_direction} (ADX: {mtf.adx:.1f})
-{'✅' if 'Rising' in mtf.price_trend else '⚠️'} Price: {mtf.price_trend}
-{'✅' if 'Rising' in mtf.rsi_trend else '⚠️'} RSI: {mtf.rsi_trend}"""
+            mtf_section = f"\nLower TF ({mtf.confirmation_tf}): {mtf.trend_direction} (ADX: {mtf.adx:.1f})"
         else:
             mtf_section = ""
         
+        # Momentum
         mom = alert.momentum
-        rsi_emoji = "✅" if mom.rsi_confirmed else "⏳"
-        price_emoji = "✅" if mom.price_confirmed else "⏳"
-        adx_emoji = "✅" if mom.adx_value > MIN_ADX_MODERATE else "⚠️"
         
+        # Entry/SL/TP
         entry = div.current_price
         if is_bull:
             sl = min(div.swing1.price, div.swing2.price) * 0.99
@@ -843,35 +940,33 @@ class AlertFormatter:
             tp = entry * 0.96
             trade = "SHORT"
         
-        div_type_display = div.divergence_type.value.replace('_', ' ').title()
-        
-        msg = f"""{quality_emoji} {quality_label} | {emoji} {label} - {direction}
+        msg = f"""{emoji} {label} SIGNAL - {direction}
 
-📊 {alert.symbol} (#{alert.volume_rank})
-⏰ {alert.signal_tf.upper()} | {format_sl_time(alert.candle_close_time)}
+{alert.symbol} (#{alert.volume_rank})
+{alert.signal_tf.upper()} | {format_sl_time(alert.candle_close_time)}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📈 {div_type_display}
-
+--- DIVERGENCE ---
+{div.divergence_type.value.replace('_', ' ').title()}
 Swing 1: {fmt(div.swing1.price)} (RSI: {div.swing1.rsi:.1f})
 Swing 2: {fmt(div.swing2.price)} (RSI: {div.swing2.rsi:.1f})
 Now: {fmt(div.current_price)} (RSI: {div.current_rsi:.1f})
+{div.candles_apart} candles apart
 
-🔍 {div.candles_apart} candles apart
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{conf_emoji} {conf_text}
-{mtf_section}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{rsi_emoji} RSI ({alert.signal_tf}): {mom.rsi_direction}
-{price_emoji} Price ({alert.signal_tf}): {mom.price_direction}
-{adx_emoji} Trend: {mom.adx_direction} (ADX: {mom.adx_value:.1f})
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 {trade} | Entry: {fmt(entry)}
-🛑 SL: {fmt(sl)} | 🎯 TP: {fmt(tp)}
+--- CONFIRMATION ---
+{conf_text}{mtf_section}
 
-🔥 Confidence: {alert.total_confidence * 100:.0f}%
-📺 {alert.tradingview_link}
+--- MOMENTUM ---
+RSI: {mom.rsi_direction}
+Price: {mom.price_direction}
+Trend: {mom.adx_direction} (ADX: {mom.adx_value:.1f})
 
-⚠️ DYOR | 🇱🇰 {format_sl_time()}"""
+--- TRADE ---
+{trade} | Entry: {fmt(entry)}
+SL: {fmt(sl)} | TP: {fmt(tp)}
+
+Confidence: {alert.total_confidence * 100:.0f}%
+Chart: {alert.tradingview_link}
+
+DYOR | {format_sl_time()}"""
         
         return msg
