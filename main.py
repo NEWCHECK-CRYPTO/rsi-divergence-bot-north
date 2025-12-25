@@ -564,9 +564,6 @@ async def verify_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report.append("5. Verify price/RSI divergence visually")
         report.append("")
         
-        # Import pandas for the report
-        import pandas as pd
-        
         # Send report
         full_report = "\n".join(report)
         
