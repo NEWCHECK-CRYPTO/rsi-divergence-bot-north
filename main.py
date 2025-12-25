@@ -1,5 +1,5 @@
 """
-Main Telegram Bot - V11 RELAXED VERSION
+Main Telegram Bot - V10 with Debug Commands
 """
 
 import asyncio
@@ -18,8 +18,8 @@ from config import (
     TOP_COINS_COUNT, TIMEZONE, EXCHANGE
 )
 from divergence_scanner import (
-    DivergenceScanner, AlertFormatter, SignalStrength, SignalQuality,
-    get_sl_time, format_sl_time
+    DivergenceScanner, AlertFormatter, SignalStrength, 
+    get_sl_time, format_sl_time, calculate_adx
 )
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -38,17 +38,16 @@ class HealthHandler(BaseHTTPRequestHandler):
         
         symbols = scanner.get_symbols_to_scan()
         
-        html = f"""<!DOCTYPE html><html><head><title>RSI Bot V11</title>
+        html = f"""<!DOCTYPE html><html><head><title>RSI Bot Working</title>
 <style>body{{font-family:system-ui;background:#0d1117;color:#fff;padding:40px}}
-h1{{color:#58a6ff}}p{{color:#8b949e}}.badge{{background:#238636;padding:4px 8px;border-radius:6px}}</style></head>
+h1{{color:#58a6ff}}p{{color:#8b949e}}</style></head>
 <body>
-<h1>🤖 RSI Divergence Bot - V11 Relaxed</h1>
+<h1>RSI Divergence Bot - V10</h1>
 <p>Exchange: <b>{EXCHANGE.upper()}</b></p>
 <p>Coins: <b>{len(symbols)}</b></p>
 <p>Timeframes: <b>{', '.join(SCAN_TIMEFRAMES)}</b></p>
 <p>Subscribers: <b>{len(subscribers)}</b></p>
-<p>Features: <span class="badge">Hidden Divergences</span> <span class="badge">Quality Tiers</span></p>
-<p>Status: <span style="color:#3fb950">✅ RUNNING</span></p>
+<p>Status: <span style="color:#3fb950">RUNNING</span></p>
 <p>Time: {format_sl_time()}</p>
 </body></html>"""
         
@@ -68,128 +67,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
     
     await update.message.reply_text(
-        f"🤖 *RSI Divergence Bot - V11 Relaxed*\n\n"
-        f"📊 *{len(symbols)}* coins\n"
-        f"⏰ {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"🦎 Exchange: *{EXCHANGE.upper()}*\n\n"
-        f"✨ *Features:*\n"
-        f"• Regular + Hidden Divergences\n"
-        f"• Quality Tiers (Premium/Standard/Exploratory)\n"
-        f"• Optional MTF Confirmation\n\n"
+        f"*RSI Divergence Bot - V10*\n\n"
+        f"*{len(symbols)}* coins loaded\n"
+        f"Timeframes: {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"Exchange: *{EXCHANGE.upper()}*\n\n"
         f"*Commands:*\n"
-        f"/subscribe - Get all signals (65%+)\n"
-        f"/premium - Only premium signals (85%+)\n"
-        f"/standard - Standard+ signals (70%+)\n"
+        f"/subscribe - Get alerts\n"
         f"/scan - Manual scan\n"
         f"/coins - List coins\n"
-        f"/mystatus - Check your settings\n\n"
-        f"🇱🇰 {format_sl_time()}",
+        f"/debug - Full diagnostic\n"
+        f"/debugraw - Raw API data\n\n"
+        f"Time: {format_sl_time()}",
         parse_mode='Markdown'
     )
 
 
 async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    subscribers[chat_id] = {
-        "min_confidence": 0.65,
-        "quality_filter": None
-    }
+    subscribers[chat_id] = {"min_strength": SignalStrength.EARLY}
     
     await update.message.reply_text(
-        f"✅ *Subscribed!*\n\n"
-        f"Getting: *All Signals* (65%+)\n"
-        f"Quality: All tiers 💎⭐🔍\n\n"
-        f"🦎 Exchange: {EXCHANGE.upper()}\n"
-        f"🔄 Scan every {SCAN_INTERVAL//60} min\n\n"
-        f"Change filter:\n"
-        f"/premium - Only 85%+ signals\n"
-        f"/standard - Only 70%+ signals\n\n"
-        f"🇱🇰 {format_sl_time()}",
-        parse_mode='Markdown'
-    )
-
-
-async def premium_only(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if chat_id not in subscribers:
-        await update.message.reply_text("❌ Please /subscribe first")
-        return
-    
-    subscribers[chat_id]["min_confidence"] = 0.85
-    subscribers[chat_id]["quality_filter"] = "premium"
-    
-    await update.message.reply_text(
-        f"💎 *Premium Signals Only*\n\n"
-        f"Minimum confidence: 85%\n"
-        f"Quality: Premium tier only\n\n"
-        f"Expected: 5-10 signals/day\n"
-        f"Win rate: ~75%\n\n"
-        f"🇱🇰 {format_sl_time()}",
-        parse_mode='Markdown'
-    )
-
-
-async def standard_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if chat_id not in subscribers:
-        await update.message.reply_text("❌ Please /subscribe first")
-        return
-    
-    subscribers[chat_id]["min_confidence"] = 0.70
-    subscribers[chat_id]["quality_filter"] = "standard"
-    
-    await update.message.reply_text(
-        f"⭐ *Standard+ Signals*\n\n"
-        f"Minimum confidence: 70%\n"
-        f"Quality: Premium + Standard\n\n"
-        f"Expected: 15-25 signals/day\n"
-        f"Win rate: ~65%\n\n"
-        f"🇱🇰 {format_sl_time()}",
-        parse_mode='Markdown'
-    )
-
-
-async def my_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    
-    if chat_id not in subscribers:
-        await update.message.reply_text("❌ Not subscribed. Use /subscribe")
-        return
-    
-    settings = subscribers[chat_id]
-    min_conf = settings["min_confidence"]
-    quality = settings["quality_filter"]
-    
-    if quality == "premium":
-        quality_text = "💎 Premium only"
-    elif quality == "standard":
-        quality_text = "⭐ Premium + Standard"
-    else:
-        quality_text = "💎⭐🔍 All tiers"
-    
-    await update.message.reply_text(
-        f"📊 *Your Settings*\n\n"
-        f"Min Confidence: {min_conf*100:.0f}%\n"
-        f"Quality Filter: {quality_text}\n\n"
-        f"Change:\n"
-        f"/subscribe - All signals (65%+)\n"
-        f"/premium - Premium only (85%+)\n"
-        f"/standard - Standard+ (70%+)\n\n"
-        f"🇱🇰 {format_sl_time()}",
+        f"*Subscribed!*\n\n"
+        f"Exchange: {EXCHANGE.upper()}\n"
+        f"Scan every {SCAN_INTERVAL//60} min\n"
+        f"Time: {format_sl_time()}",
         parse_mode='Markdown'
     )
 
 
 async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subscribers.pop(update.effective_chat.id, None)
-    await update.message.reply_text("❌ Unsubscribed")
+    await update.message.reply_text("Unsubscribed")
 
 
 async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Fetching coins...")
+    await update.message.reply_text("Fetching coins...")
     symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
     
-    msg = f"📊 *Top {len(symbols)} Coins on {EXCHANGE.upper()}*\n\n"
+    msg = f"*Top {len(symbols)} Coins on {EXCHANGE.upper()}*\n\n"
     for i, s in enumerate(symbols[:30], 1):
         msg += f"{i}. {s}\n"
     
@@ -199,12 +114,299 @@ async def show_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comprehensive debug command to test all bot components"""
+    await update.message.reply_text("*Running Full Diagnostic...*", parse_mode='Markdown')
+    
+    debug_report = []
+    debug_report.append("=" * 40)
+    debug_report.append("RSI DIVERGENCE BOT - DIAGNOSTIC REPORT")
+    debug_report.append("=" * 40)
+    debug_report.append(f"Time: {format_sl_time()}")
+    debug_report.append(f"Exchange: {EXCHANGE.upper()}")
+    debug_report.append("")
+    
+    # TEST 1: Exchange Connection
+    debug_report.append("[TEST 1] Exchange Connection")
+    debug_report.append("-" * 40)
+    try:
+        markets = scanner.exchange.load_markets()
+        total_markets = len(markets)
+        usdt_markets = len([m for m in markets if m.endswith('/USDT')])
+        debug_report.append(f"[OK] Connected to {EXCHANGE.upper()}")
+        debug_report.append(f"     Total markets: {total_markets}")
+        debug_report.append(f"     USDT pairs: {usdt_markets}")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Connection FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 2: Fetch Top Coins
+    debug_report.append("[TEST 2] Fetch Top Coins by Volume")
+    debug_report.append("-" * 40)
+    try:
+        symbols = scanner.fetch_top_coins_by_volume(TOP_COINS_COUNT)
+        debug_report.append(f"[OK] Fetched {len(symbols)} coins")
+        if len(symbols) > 0:
+            debug_report.append(f"     Top 5: {', '.join(symbols[:5])}")
+            debug_report.append(f"     #50: {symbols[49] if len(symbols) >= 50 else 'N/A'}")
+            debug_report.append(f"     #100: {symbols[99] if len(symbols) >= 100 else 'N/A'}")
+        else:
+            debug_report.append(f"[WARN] 0 coins returned!")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Fetch FAILED: {e}")
+        symbols = []
+    debug_report.append("")
+    
+    # TEST 3: OHLCV Data Fetch
+    debug_report.append("[TEST 3] OHLCV Data Fetch")
+    debug_report.append("-" * 40)
+    test_symbol = symbols[0] if symbols else "BTC/USDT"
+    try:
+        for tf in SCAN_TIMEFRAMES:
+            df = scanner.fetch_ohlcv(test_symbol, tf, limit=50)
+            if df is not None and len(df) > 0:
+                debug_report.append(f"[OK] {tf}: {len(df)} candles")
+                debug_report.append(f"     Latest: O={df['open'].iloc[-1]:.2f} H={df['high'].iloc[-1]:.2f}")
+                debug_report.append(f"             L={df['low'].iloc[-1]:.2f} C={df['close'].iloc[-1]:.2f}")
+                debug_report.append(f"     Time: {df['timestamp'].iloc[-1]}")
+            else:
+                debug_report.append(f"[FAIL] {tf}: No data returned")
+    except Exception as e:
+        debug_report.append(f"[FAIL] OHLCV FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 4: RSI Calculation
+    debug_report.append("[TEST 4] RSI Calculation")
+    debug_report.append("-" * 40)
+    try:
+        df = scanner.fetch_ohlcv(test_symbol, "4h", limit=100)
+        if df is not None:
+            rsi_values = df['rsi'].dropna()
+            if len(rsi_values) > 0:
+                debug_report.append(f"[OK] RSI calculated for {test_symbol}")
+                debug_report.append(f"     Current RSI: {rsi_values.iloc[-1]:.2f}")
+                debug_report.append(f"     RSI Range: {rsi_values.min():.2f} - {rsi_values.max():.2f}")
+                debug_report.append(f"     RSI Mean: {rsi_values.mean():.2f}")
+                
+                # Show last 5 RSI values
+                last5 = rsi_values.tail(5).tolist()
+                debug_report.append(f"     Last 5: {', '.join([f'{r:.1f}' for r in last5])}")
+            else:
+                debug_report.append(f"[FAIL] RSI calculation returned empty")
+    except Exception as e:
+        debug_report.append(f"[FAIL] RSI FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 5: Swing Detection
+    debug_report.append("[TEST 5] Swing Point Detection")
+    debug_report.append("-" * 40)
+    try:
+        df = scanner.fetch_ohlcv(test_symbol, "4h", limit=100)
+        if df is not None:
+            swing_highs = scanner.find_swing_highs(df, 3)
+            swing_lows = scanner.find_swing_lows(df, 3)
+            
+            debug_report.append(f"[OK] Swing detection working")
+            debug_report.append(f"     Swing Highs found: {len(swing_highs)}")
+            debug_report.append(f"     Swing Lows found: {len(swing_lows)}")
+            
+            if swing_highs:
+                latest_high = swing_highs[-1]
+                debug_report.append(f"     Latest High: ${latest_high.price:.2f} (RSI: {latest_high.rsi:.1f})")
+            if swing_lows:
+                latest_low = swing_lows[-1]
+                debug_report.append(f"     Latest Low: ${latest_low.price:.2f} (RSI: {latest_low.rsi:.1f})")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Swing Detection FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 6: ADX Calculation
+    debug_report.append("[TEST 6] ADX Calculation")
+    debug_report.append("-" * 40)
+    try:
+        df = scanner.fetch_ohlcv(test_symbol, "4h", limit=100)
+        if df is not None:
+            adx = calculate_adx(df, period=14)
+            debug_report.append(f"[OK] ADX calculated: {adx:.2f}")
+            if adx > 25:
+                debug_report.append(f"     Trend: STRONG")
+            elif adx > 20:
+                debug_report.append(f"     Trend: MODERATE")
+            else:
+                debug_report.append(f"     Trend: WEAK")
+    except Exception as e:
+        debug_report.append(f"[FAIL] ADX FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 7: Divergence Detection (Quick scan on 5 coins)
+    debug_report.append("[TEST 7] Divergence Detection")
+    debug_report.append("-" * 40)
+    try:
+        test_coins = symbols[:5] if len(symbols) >= 5 else symbols
+        divergences_found = 0
+        
+        for sym in test_coins:
+            for tf in ["4h"]:
+                df = scanner.fetch_ohlcv(sym, tf, limit=100)
+                if df is not None:
+                    swing_highs = scanner.find_swing_highs(df, 3)
+                    swing_lows = scanner.find_swing_lows(df, 3)
+                    div = scanner.detect_divergence(df, swing_lows, swing_highs)
+                    if div:
+                        divergences_found += 1
+                        debug_report.append(f"     Found: {sym}: {div.divergence_type.value}")
+        
+        debug_report.append(f"[OK] Divergence detection working")
+        debug_report.append(f"     Scanned: {len(test_coins)} coins on 4h")
+        debug_report.append(f"     Raw divergences: {divergences_found}")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Divergence Detection FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 8: Full Signal Pipeline (1 coin)
+    debug_report.append("[TEST 8] Full Signal Pipeline")
+    debug_report.append("-" * 40)
+    try:
+        # Temporarily disable cooldown for test
+        original_cooldowns = scanner.alert_cooldowns.copy()
+        scanner.alert_cooldowns = {}
+        
+        test_coin = symbols[0] if symbols else "BTC/USDT"
+        alerts = scanner.scan_symbol(test_coin, "4h")
+        
+        scanner.alert_cooldowns = original_cooldowns
+        
+        if alerts:
+            debug_report.append(f"[OK] Full pipeline working - Signal found!")
+            debug_report.append(f"     {test_coin} 4h: {alerts[0].divergence.divergence_type.value}")
+            debug_report.append(f"     Confidence: {alerts[0].total_confidence*100:.0f}%")
+        else:
+            debug_report.append(f"[OK] Full pipeline working - No signal (normal)")
+            debug_report.append(f"     {test_coin} 4h: No divergence meeting criteria")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Full Pipeline FAILED: {e}")
+        import traceback
+        debug_report.append(f"     {traceback.format_exc()[:200]}")
+    debug_report.append("")
+    
+    # TEST 9: Volume Ranking
+    debug_report.append("[TEST 9] Volume Ranking")
+    debug_report.append("-" * 40)
+    try:
+        if scanner.volume_ranks:
+            debug_report.append(f"[OK] Volume ranks stored: {len(scanner.volume_ranks)}")
+            top3 = list(scanner.volume_ranks.items())[:3]
+            for sym, rank in top3:
+                debug_report.append(f"     #{rank}: {sym}")
+        else:
+            debug_report.append(f"[WARN] No volume ranks stored")
+    except Exception as e:
+        debug_report.append(f"[FAIL] Volume Ranking FAILED: {e}")
+    debug_report.append("")
+    
+    # TEST 10: Bot Status
+    debug_report.append("[TEST 10] Bot Status")
+    debug_report.append("-" * 40)
+    debug_report.append(f"[OK] Subscribers: {len(subscribers)}")
+    debug_report.append(f"[OK] Cooldowns active: {len(scanner.alert_cooldowns)}")
+    debug_report.append(f"[OK] Scan interval: {SCAN_INTERVAL}s ({SCAN_INTERVAL//60}min)")
+    debug_report.append(f"[OK] Timeframes: {', '.join(SCAN_TIMEFRAMES)}")
+    debug_report.append("")
+    
+    # SUMMARY
+    debug_report.append("=" * 40)
+    debug_report.append("DIAGNOSTIC SUMMARY")
+    debug_report.append("=" * 40)
+    
+    all_passed = len(symbols) > 0
+    if all_passed:
+        debug_report.append("[OK] All critical tests PASSED")
+        debug_report.append("[OK] Bot is OPERATIONAL")
+    else:
+        debug_report.append("[FAIL] Some tests FAILED")
+        debug_report.append("[WARN] Check logs for details")
+    
+    debug_report.append("")
+    debug_report.append(f"Report generated: {format_sl_time()}")
+    
+    # Send report (split if too long)
+    full_report = "\n".join(debug_report)
+    
+    if len(full_report) > 4000:
+        # Split into chunks
+        chunks = [full_report[i:i+4000] for i in range(0, len(full_report), 4000)]
+        for i, chunk in enumerate(chunks):
+            await update.message.reply_text(f"```\n{chunk}\n```", parse_mode='Markdown')
+            await asyncio.sleep(0.3)
+    else:
+        await update.message.reply_text(f"```\n{full_report}\n```", parse_mode='Markdown')
+
+
+async def debug_raw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Raw data debug - shows actual API responses"""
+    await update.message.reply_text("*Fetching Raw Data from Bybit...*", parse_mode='Markdown')
+    
+    try:
+        # Raw ticker fetch
+        import ccxt
+        exchange = ccxt.bybit()
+        
+        # Test 1: Raw markets
+        markets = exchange.load_markets()
+        usdt_futures = [m for m in markets.keys() if m.endswith('/USDT') and ':USDT' not in m]
+        
+        msg = f"*Raw Bybit Data*\n\n"
+        msg += f"Total markets: {len(markets)}\n"
+        msg += f"USDT Spot pairs: {len(usdt_futures)}\n\n"
+        
+        # Test 2: Raw tickers
+        tickers = exchange.fetch_tickers()
+        usdt_tickers = {k: v for k, v in tickers.items() if k.endswith('/USDT')}
+        
+        msg += f"Tickers received: {len(tickers)}\n"
+        msg += f"USDT tickers: {len(usdt_tickers)}\n\n"
+        
+        # Sort by volume
+        sorted_tickers = sorted(
+            usdt_tickers.items(),
+            key=lambda x: x[1].get('quoteVolume', 0) or 0,
+            reverse=True
+        )
+        
+        msg += f"*Top 10 by Volume:*\n"
+        for i, (sym, ticker) in enumerate(sorted_tickers[:10], 1):
+            vol = ticker.get('quoteVolume', 0) or 0
+            price = ticker.get('last', 0) or 0
+            msg += f"{i}. {sym}: ${vol/1e6:.1f}M (${price:.4f})\n"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+        # Test 3: Raw OHLCV
+        test_sym = sorted_tickers[0][0] if sorted_tickers else "BTC/USDT"
+        ohlcv = exchange.fetch_ohlcv(test_sym, '4h', limit=5)
+        
+        msg2 = f"*Raw OHLCV for {test_sym}*\n\n"
+        msg2 += "```\n"
+        msg2 += "Time                 O        H        L        C\n"
+        msg2 += "-" * 55 + "\n"
+        for candle in ohlcv:
+            ts = datetime.fromtimestamp(candle[0]/1000)
+            msg2 += f"{ts.strftime('%m-%d %H:%M')}  {candle[1]:<8.2f} {candle[2]:<8.2f} {candle[3]:<8.2f} {candle[4]:<8.2f}\n"
+        msg2 += "```"
+        
+        await update.message.reply_text(msg2, parse_mode='Markdown')
+        
+    except Exception as e:
+        import traceback
+        await update.message.reply_text(f"Error: {e}\n\n{traceback.format_exc()[:500]}")
+
+
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
     await update.message.reply_text(
-        f"🔍 *Scanning {len(symbols)} coins...*\n\n"
-        f"⏰ TFs: {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"⏳ This takes 3-5 minutes...",
+        f"*Scanning {len(symbols)} coins...*\n\n"
+        f"Timeframes: {', '.join(SCAN_TIMEFRAMES)}\n"
+        f"This takes 3-5 minutes...",
         parse_mode='Markdown'
     )
     
@@ -212,15 +414,8 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         alerts = scanner.scan_all()
         
         if alerts:
-            premium = [a for a in alerts if a.signal_quality == SignalQuality.PREMIUM]
-            standard = [a for a in alerts if a.signal_quality == SignalQuality.STANDARD]
-            exploratory = [a for a in alerts if a.signal_quality == SignalQuality.EXPLORATORY]
-            
             await update.message.reply_text(
-                f"✅ *Found {len(alerts)} signals!*\n\n"
-                f"💎 Premium: {len(premium)}\n"
-                f"⭐ Standard: {len(standard)}\n"
-                f"🔍 Exploratory: {len(exploratory)}",
+                f"*Found {len(alerts)} signals!*",
                 parse_mode='Markdown'
             )
             
@@ -236,14 +431,14 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         else:
             await update.message.reply_text(
-                f"🔭 *No divergences found*\n\n"
+                f"*No divergences found*\n\n"
                 f"Try again in 1-2 hours.\n\n"
-                f"🇱🇰 {format_sl_time()}",
+                f"Time: {format_sl_time()}",
                 parse_mode='Markdown'
             )
     
     except Exception as e:
-        await update.message.reply_text(f"❌ Scan error: {e}")
+        await update.message.reply_text(f"Scan error: {e}")
 
 
 async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
@@ -260,28 +455,10 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
             return
         
         for alert in alerts:
-            logger.info(f"[{format_sl_time()}] Signal: {alert.symbol} {alert.signal_tf} - {alert.signal_quality.value} ({alert.total_confidence*100:.0f}%)")
+            logger.info(f"[{format_sl_time()}] Signal: {alert.symbol} {alert.signal_tf}")
         
-        for chat_id, settings in subscribers.items():
-            min_conf = settings["min_confidence"]
-            quality_filter = settings["quality_filter"]
-            
-            filtered_alerts = []
-            for alert in alerts:
-                if alert.total_confidence < min_conf:
-                    continue
-                
-                if quality_filter == "premium" and alert.signal_quality != SignalQuality.PREMIUM:
-                    continue
-                elif quality_filter == "standard" and alert.signal_quality == SignalQuality.EXPLORATORY:
-                    continue
-                
-                filtered_alerts.append(alert)
-            
-            if not filtered_alerts:
-                continue
-            
-            for alert in filtered_alerts[:5]:
+        for chat_id in subscribers.keys():
+            for alert in alerts[:5]:
                 try:
                     msg = AlertFormatter.format_alert(alert)
                     await context.bot.send_message(chat_id=chat_id, text=msg)
@@ -306,16 +483,15 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("subscribe", subscribe))
-    app.add_handler(CommandHandler("premium", premium_only))
-    app.add_handler(CommandHandler("standard", standard_mode))
-    app.add_handler(CommandHandler("mystatus", my_status))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("scan", manual_scan))
     app.add_handler(CommandHandler("coins", show_coins))
+    app.add_handler(CommandHandler("debug", debug))
+    app.add_handler(CommandHandler("debugraw", debug_raw))
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
-    logger.info(f"[{format_sl_time()}] 🤖 Bot V11 Relaxed ({EXCHANGE.upper()}) starting...")
+    logger.info(f"[{format_sl_time()}] Bot V10 ({EXCHANGE.upper()}) starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
