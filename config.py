@@ -1,0 +1,63 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+EXCHANGE = "bybit"
+TIMEZONE = "Asia/Colombo"
+
+SYMBOLS = []
+TOP_COINS_COUNT = 150
+QUOTE_CURRENCY = "USDT"
+
+EXCLUDED_SYMBOLS = [
+    "USDC/USDT", "BUSD/USDT", "TUSD/USDT", "USDP/USDT", "FDUSD/USDT",
+    "DAI/USDT", "USDD/USDT", "EURC/USDT", "AEUR/USDT",
+]
+
+EXCLUDE_LEVERAGED = True
+
+SCAN_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+
+TREND_CONFIRMATION_MAP = {
+    "1M": "1d",
+    "1w": "4h",
+    "1d": "1h",
+    "4h": "15m",
+    "1h": "5m",
+    "15m": "5m",
+}
+
+TIMEFRAME_CONFIRMATION_MAP = TREND_CONFIRMATION_MAP
+
+LOOKBACK_CANDLES = 80
+MIN_SWING_DISTANCE = 7
+MIN_PRICE_MOVE_PCT = 0.3
+SWING_STRENGTH_BARS = 3
+
+CONFIRMATION_CANDLES = 2
+CONFIRMATION_THRESHOLD = 1
+
+MIN_CONFIDENCE = 0.65
+
+MAX_CANDLES_SINCE_SWING2 = {
+    "15m": 12,
+    "1h": 12,
+    "4h": 10,
+    "1d": 7,
+    "1w": 5,
+    "1M": 3,
+}
+
+MIN_ADX_STRONG = 22
+MIN_ADX_MODERATE = 17
+
+RSI_PERIOD = 14
+
+ALERT_COOLDOWN = 1200
+SCAN_INTERVAL = 90
+
+RAG_KNOWLEDGE_PATH = "rsi_divergence_ms_rag.json"
+GEMINI_MODEL = "gemini-1.5-flash"
