@@ -73,7 +73,7 @@ RSI_OVERSOLD = 40    # Bullish divergence: RSI must be below this
 RSI_OVERBOUGHT = 60  # Bearish divergence: RSI must be above this
 
 # Recency - Alert only when Swing 2 just formed
-MAX_CANDLES_SINCE_SWING2 = 3  # Swing 2 must be within last 3 candles
+MAX_CANDLES_SINCE_SWING2 = 2  # Swing 2 must be within last 2 candles
 
 # =============================================================================
 
@@ -241,7 +241,8 @@ class DivergenceScanner:
             raise ValueError(f"Unsupported exchange: {EXCHANGE}")
         
         self.exchange.load_markets()
-        self.alert_cooldowns = {}
+        self.alert_cooldowns = {}      # Time-based cooldown (backup)
+        self.sent_divergences = {}     # Track sent divergences by Swing2 timestamp
         self.volume_ranks = {}
         
         print(f"[{format_sl_time()}] Scanner ready!")
@@ -618,6 +619,7 @@ class DivergenceScanner:
         return signals
     
     def _is_on_cooldown(self, symbol: str, timeframe: str) -> bool:
+        """Check time-based cooldown (backup protection)"""
         key = f"{symbol}_{timeframe}"
         if key in self.alert_cooldowns:
             elapsed = time.time() - self.alert_cooldowns[key]
@@ -625,11 +627,27 @@ class DivergenceScanner:
         return False
     
     def _set_cooldown(self, symbol: str, timeframe: str):
+        """Set time-based cooldown"""
         key = f"{symbol}_{timeframe}"
         self.alert_cooldowns[key] = time.time()
     
+    def _is_divergence_already_sent(self, symbol: str, timeframe: str, swing2_timestamp: datetime) -> bool:
+        """Check if this specific divergence was already sent"""
+        key = f"{symbol}_{timeframe}_{swing2_timestamp.strftime('%Y-%m-%d_%H:%M')}"
+        return key in self.sent_divergences
+    
+    def _mark_divergence_sent(self, symbol: str, timeframe: str, swing2_timestamp: datetime):
+        """Mark this divergence as sent so we don't send it again"""
+        key = f"{symbol}_{timeframe}_{swing2_timestamp.strftime('%Y-%m-%d_%H:%M')}"
+        self.sent_divergences[key] = time.time()
+        
+        # Clean old entries (older than 7 days) to prevent memory buildup
+        current_time = time.time()
+        week_ago = current_time - (7 * 24 * 60 * 60)
+        self.sent_divergences = {k: v for k, v in self.sent_divergences.items() if v > week_ago}
+    
     def scan_symbol(self, symbol: str, timeframe: str) -> List[AlertSignal]:
-        """Scan a single symbol"""
+        """Scan a single symbol - only returns NEW divergences"""
         if self._is_on_cooldown(symbol, timeframe):
             return []
         
@@ -639,14 +657,22 @@ class DivergenceScanner:
         
         signals = self.detect_divergences(symbol, df, timeframe)
         
+        # Filter out already-sent divergences
+        new_signals = []
         for signal in signals:
             signal.timeframe = timeframe
             signal.tradingview_link = get_tradingview_link(symbol, timeframe)
+            
+            # Check if this specific divergence was already sent
+            if not self._is_divergence_already_sent(symbol, timeframe, signal.divergence.swing2.timestamp):
+                new_signals.append(signal)
+                # Mark as sent
+                self._mark_divergence_sent(symbol, timeframe, signal.divergence.swing2.timestamp)
         
-        if signals:
+        if new_signals:
             self._set_cooldown(symbol, timeframe)
         
-        return signals
+        return new_signals
     
     def scan_all(self) -> List[AlertSignal]:
         """Scan all symbols"""
