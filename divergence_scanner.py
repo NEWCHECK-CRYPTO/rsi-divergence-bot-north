@@ -53,13 +53,14 @@ SL_TZ = pytz.timezone(TIMEZONE)
 # =============================================================================
 
 # Swing Detection - Strength per Timeframe
-# Most professional traders use 2 for optimal balance
+# Lower timeframes (1H, 4H): Strength 2 - more noisy, need confirmation
+# Higher timeframes (1D, 1W, 1M): Strength 1 - faster signals, less noise
 SWING_STRENGTH_MAP = {
-    "1h": 2,
-    "4h": 2,
-    "1d": 2,
-    "1w": 2,
-    "1M": 2,
+    "1h": 2,   # 2 candles confirmation (2 hours delay)
+    "4h": 2,   # 2 candles confirmation (8 hours delay)
+    "1d": 1,   # 1 candle confirmation (1 day delay)
+    "1w": 1,   # 1 candle confirmation (1 week delay)
+    "1M": 1,   # 1 candle confirmation (1 month delay)
 }
 SWING_STRENGTH = 2  # Default fallback
 
