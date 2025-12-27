@@ -75,6 +75,15 @@ RSI_OVERBOUGHT = 60  # Bearish divergence: RSI must be above this
 # Recency - Alert only when Swing 2 just formed
 MAX_CANDLES_SINCE_SWING2 = 2  # Swing 2 must be within last 2 candles
 
+# Max age in seconds - prevents stale/late signals
+MAX_SIGNAL_AGE = {
+    "1h": 2 * 60 * 60,           # 2 hours
+    "4h": 8 * 60 * 60,           # 8 hours
+    "1d": 2 * 24 * 60 * 60,      # 2 days
+    "1w": 14 * 24 * 60 * 60,     # 2 weeks (14 days)
+    "1M": 60 * 24 * 60 * 60,     # 2 months (~60 days)
+}
+
 # =============================================================================
 
 
@@ -522,6 +531,17 @@ class DivergenceScanner:
                 continue
             why_valid.append(f"Recency: {candles_since} candles ago")
             
+            # Condition 7: Age check - prevent stale/late signals
+            current_time = datetime.now(pytz.UTC)
+            swing2_time = swing2.timestamp
+            if swing2_time.tzinfo is None:
+                swing2_time = pytz.UTC.localize(swing2_time)
+            age_seconds = (current_time - swing2_time).total_seconds()
+            max_age = MAX_SIGNAL_AGE.get(timeframe, 2 * 24 * 60 * 60)  # Default 2 days
+            if age_seconds > max_age:
+                continue
+            why_valid.append(f"Age: {age_seconds/3600:.1f}h (max {max_age/3600:.0f}h)")
+            
             # ALL PASSED - Determine strength
             if swing2.rsi < 30:
                 strength = SignalStrength.STRONG
@@ -588,6 +608,17 @@ class DivergenceScanner:
             if candles_since > MAX_CANDLES_SINCE_SWING2:
                 continue
             why_valid.append(f"Recency: {candles_since} candles ago")
+            
+            # Condition 7: Age check - prevent stale/late signals
+            current_time = datetime.now(pytz.UTC)
+            swing2_time = swing2.timestamp
+            if swing2_time.tzinfo is None:
+                swing2_time = pytz.UTC.localize(swing2_time)
+            age_seconds = (current_time - swing2_time).total_seconds()
+            max_age = MAX_SIGNAL_AGE.get(timeframe, 2 * 24 * 60 * 60)  # Default 2 days
+            if age_seconds > max_age:
+                continue
+            why_valid.append(f"Age: {age_seconds/3600:.1f}h (max {max_age/3600:.0f}h)")
             
             # Determine strength
             if swing2.rsi > 70:
