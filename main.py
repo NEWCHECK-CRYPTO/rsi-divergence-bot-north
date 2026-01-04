@@ -1,6 +1,6 @@
 """
-RSI Divergence Bot - STRONG SIGNALS ONLY VERSION
-Main Telegram Bot - Only sends STRONG signals
+RSI Divergence Bot - SIMPLIFIED VERSION
+Main Telegram Bot with variable Swing Strength per timeframe
 """
 
 import asyncio
@@ -43,11 +43,11 @@ class HealthHandler(BaseHTTPRequestHandler):
         
         symbols = scanner.get_symbols_to_scan()
         
-        html = f"""<!DOCTYPE html><html><head><title>RSI Divergence Bot - STRONG SIGNALS</title>
+        html = f"""<!DOCTYPE html><html><head><title>RSI Divergence Bot</title>
 <style>body{{font-family:system-ui;background:#0d1117;color:#fff;padding:40px}}
-h1{{color:#58a6ff}}p{{color:#8b949e}}.ok{{color:#3fb950}}.strong{{color:#ffd700}}</style></head>
+h1{{color:#58a6ff}}p{{color:#8b949e}}.ok{{color:#3fb950}}</style></head>
 <body>
-<h1>RSI Divergence Bot - STRONG SIGNALS ONLY</h1>
+<h1>RSI Divergence Bot - Simplified</h1>
 <p>Exchange: <b>{EXCHANGE.upper()}</b></p>
 <p>Coins: <b>{len(symbols)}</b></p>
 <p>Timeframes: <b>{', '.join(SCAN_TIMEFRAMES)}</b></p>
@@ -60,9 +60,6 @@ h1{{color:#58a6ff}}p{{color:#8b949e}}.ok{{color:#3fb950}}.strong{{color:#ffd700}
 <p>Swing Distance: {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles</p>
 <p>Bullish RSI: &lt; {RSI_OVERSOLD}</p>
 <p>Bearish RSI: &gt; {RSI_OVERBOUGHT}</p>
-<p class="strong">⚡ STRONG ONLY: Bull RSI &lt; 30, Bear RSI &gt; 70</p>
-<h3>Alert Timing (1 candle after swing):</h3>
-<p>4h: 4 hours | 1d: 1 day | 1w: 1 week | 1M: 1 month</p>
 </body></html>"""
         
         self.wfile.write(html.encode())
@@ -80,7 +77,7 @@ def run_web_server():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
     
-    msg = f"""*RSI Divergence Bot - STRONG SIGNALS ONLY*
+    msg = f"""*RSI Divergence Bot - Simplified*
 
 📊 *{len(symbols)}* coins loaded
 ⏰ Timeframes: {', '.join(SCAN_TIMEFRAMES)}
@@ -93,15 +90,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Bearish RSI: > {RSI_OVERBOUGHT} (overbought)
 • Price-based invalidation only
 
-*⚡ STRONG SIGNALS ONLY:*
-• Bullish: RSI < 30 (deeply oversold)
-• Bearish: RSI > 70 (deeply overbought)
-
-*Alert Timing (1 candle after swing):*
-• 4h: 4 hours after swing
-• 1d: 1 day after swing
-• 1w: 1 week after swing
-• 1M: 1 month after swing
+*Alert Timing:*
+• 4h: 2 candles after swing (8 hours)
+• 1d: 2 candles after swing (2 days)
+• 1w: 1 candle after swing (1 week)
+• 1M: 1 candle after swing (1 month)
 
 *Commands:*
 /subscribe - Get alerts
@@ -118,19 +111,13 @@ Time: {format_sl_time()}"""
 
 async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current conditions"""
-    msg = f"""*📋 Signal Conditions - STRONG ONLY*
+    msg = f"""*📋 Signal Conditions*
 
 *Swing Strength per Timeframe:*
-• 4h: 2 candles each side
-• 1d: 2 candles each side
-• 1w: 1 candle each side
-• 1M: 1 candle each side
-
-*Alert Timing (1 candle after swing):*
-• 4h: Alert after 4 hours
-• 1d: Alert after 1 day
-• 1w: Alert after 1 week
-• 1M: Alert after 1 month
+• 4h: 2 candles each side (alert after 8 hours)
+• 1d: 2 candles each side (alert after 2 days)
+• 1w: 1 candle each side (alert after 1 week)
+• 1M: 1 candle each side (alert after 1 month)
 
 *For BULLISH Divergence:*
 1. Price makes LOWER LOW (Swing2 < Swing1)
@@ -138,8 +125,7 @@ async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. RSI is OVERSOLD (< {RSI_OVERSOLD})
 4. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
 5. No candle CLOSE below Swing2 between swings
-6. Swing2 is 1 candle old (just confirmed)
-7. ⚡ RSI < 30 (STRONG only)
+6. Swing2 recently confirmed
 
 *For BEARISH Divergence:*
 1. Price makes HIGHER HIGH (Swing2 > Swing1)
@@ -147,12 +133,12 @@ async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 3. RSI is OVERBOUGHT (> {RSI_OVERBOUGHT})
 4. Swings are {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles apart
 5. No candle CLOSE above Swing2 between swings
-6. Swing2 is 1 candle old (just confirmed)
-7. ⚡ RSI > 70 (STRONG only)
+6. Swing2 recently confirmed
 
-*Signal Filter:*
-🟢 STRONG ONLY: RSI < 30 (bull) or > 70 (bear)
-❌ MEDIUM & EARLY signals are filtered out"""
+*Signal Strength:*
+🟢 STRONG: RSI < 30 (bull) or > 70 (bear)
+🟡 MEDIUM: RSI 30-35 (bull) or 65-70 (bear)
+🔵 EARLY: RSI 35-40 (bull) or 60-65 (bear)"""
     
     await update.message.reply_text(msg, parse_mode='Markdown')
 
@@ -162,10 +148,8 @@ async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subscribers[chat_id] = {"subscribed": True}
     
     await update.message.reply_text(
-        f"✅ *Subscribed to STRONG signals only!*\n\n"
-        f"You'll receive alerts only when STRONG divergences are detected.\n"
-        f"• Bullish: RSI < 30\n"
-        f"• Bearish: RSI > 70\n\n"
+        f"✅ *Subscribed!*\n\n"
+        f"You'll receive alerts when divergences are detected.\n"
         f"Timeframes: {', '.join(SCAN_TIMEFRAMES)}\n"
         f"Scan interval: {SCAN_INTERVAL//60} minutes\n\n"
         f"Time: {format_sl_time()}",
@@ -209,9 +193,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Timeframes: 4h, 1d, 1w, 1M\n\n"
             "*Swing Strength:*\n"
             "• 4h, 1d: 2 candles each side\n"
-            "• 1w, 1M: 1 candle each side\n\n"
-            "*Note:* Verify shows ALL divergences,\n"
-            "but only STRONG ones are sent to channel.",
+            "• 1w, 1M: 1 candle each side",
             parse_mode='Markdown'
         )
         return
@@ -242,8 +224,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*Analyzing {symbol} {timeframe.upper()}*\n"
         f"Scanning {candles} candles...\n"
         f"Swing Strength: {strength}\n"
-        f"Recency Window: {max_recency} candle(s)\n"
-        f"STRONG filter: RSI < 30 (bull), > 70 (bear)",
+        f"Recency Window: {max_recency} candles",
         parse_mode='Markdown'
     )
     
@@ -254,183 +235,193 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Could not fetch data for {symbol}")
             return
         
-        current_idx = len(df) - 1
-        current_price = df['close'].iloc[-1]
-        current_rsi = df['rsi'].iloc[-1]
-        
+        # Get swing points with timeframe
         swing_lows = scanner.find_swing_lows(df, timeframe)
         swing_highs = scanner.find_swing_highs(df, timeframe)
         
-        # Build verification report
+        # Build report
         report = []
-        report.append("=" * 60)
-        report.append(f"DIVERGENCE VERIFICATION: {symbol} {timeframe.upper()}")
-        report.append("=" * 60)
-        report.append(f"Candles analyzed: {len(df)}")
-        report.append(f"Current Price: ${current_price:.4f}")
-        report.append(f"Current RSI: {current_rsi:.1f}")
-        report.append(f"Swing Strength: {strength}")
-        report.append(f"Recency: {max_recency} candle(s)")
-        report.append(f"Swing Distance: {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE}")
+        report.append("=" * 55)
+        report.append(f"DIVERGENCE ANALYSIS: {symbol} {timeframe.upper()}")
+        report.append(f"Candles: {len(df)} | Swing Strength: {strength}")
+        report.append(f"Recency Window: {max_recency} candles")
+        report.append(f"Time: {format_sl_time()}")
+        report.append("=" * 55)
         report.append("")
+        
+        # Current state
+        current = df.iloc[-1]
+        report.append(f"Current Price: ${current['close']:.2f}")
+        report.append(f"Current RSI: {current['rsi']:.1f}")
+        report.append(f"Data: {df['timestamp'].iloc[0].strftime('%Y-%m-%d')} to {df['timestamp'].iloc[-1].strftime('%Y-%m-%d')}")
+        report.append("")
+        
         report.append(f"Swing Lows Found: {len(swing_lows)}")
         report.append(f"Swing Highs Found: {len(swing_highs)}")
         report.append("")
         
-        # Check for bullish divergences (show all, mark strong)
-        bull_divs = []
+        # BULLISH SCAN
+        report.append("=" * 55)
+        report.append("BULLISH DIVERGENCE SCAN")
+        report.append(f"(Price Lower Low + RSI Higher Low + RSI < {RSI_OVERSOLD})")
+        report.append("=" * 55)
+        
+        bullish_found = 0
+        bullish_valid = 0
+        current_idx = len(df) - 1
+        
         for i in range(len(swing_lows) - 1):
-            sw1 = swing_lows[i]
-            sw2 = swing_lows[i + 1]
+            s1 = swing_lows[i]
+            s2 = swing_lows[i + 1]
             
-            candles_apart = sw2.index - sw1.index
-            if not (MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE):
-                continue
-            
-            if sw2.price >= sw1.price:  # Not lower low
-                continue
+            if s2.price < s1.price and s2.rsi > s1.rsi:
+                bullish_found += 1
+                candles_apart = s2.index - s1.index
+                candles_since = current_idx - s2.index
                 
-            if sw2.rsi <= sw1.rsi:  # Not higher RSI
-                continue
+                checks = []
+                all_pass = True
                 
-            if sw2.rsi >= RSI_OVERSOLD:  # Not oversold
-                continue
-            
-            # Check pattern validity
-            pattern_valid, _ = scanner.check_pattern_validity(df, sw1, sw2, True)
-            if not pattern_valid:
-                continue
-            
-            candles_since = current_idx - sw2.index
-            is_recent = candles_since <= max_recency
-            is_strong = sw2.rsi < 30
-            
-            bull_divs.append({
-                'sw1': sw1,
-                'sw2': sw2,
-                'candles_apart': candles_apart,
-                'candles_since': candles_since,
-                'is_recent': is_recent,
-                'is_strong': is_strong
-            })
+                if MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE:
+                    checks.append(f"[OK] Distance: {candles_apart} candles")
+                else:
+                    checks.append(f"[FAIL] Distance: {candles_apart} (need {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE})")
+                    all_pass = False
+                
+                checks.append(f"[OK] Price: ${s1.price:.2f} -> ${s2.price:.2f} (LOWER LOW)")
+                checks.append(f"[OK] RSI: {s1.rsi:.1f} -> {s2.rsi:.1f} (HIGHER LOW)")
+                
+                if s2.rsi < RSI_OVERSOLD:
+                    checks.append(f"[OK] RSI Zone: {s2.rsi:.1f} < {RSI_OVERSOLD} (OVERSOLD)")
+                else:
+                    checks.append(f"[FAIL] RSI Zone: {s2.rsi:.1f} >= {RSI_OVERSOLD} (NOT oversold)")
+                    all_pass = False
+                
+                valid, msg = scanner.check_pattern_validity(df, s1, s2, True)
+                if valid:
+                    checks.append(f"[OK] Pattern: {msg}")
+                else:
+                    checks.append(f"[FAIL] Pattern: {msg}")
+                    all_pass = False
+                
+                if candles_since <= max_recency:
+                    checks.append(f"[OK] Recency: {candles_since}/{max_recency} candles (RECENT)")
+                else:
+                    checks.append(f"[--] Recency: {candles_since}/{max_recency} candles (historical)")
+                
+                report.append("")
+                status = ">>> VALID SIGNAL <<<" if all_pass and candles_since <= max_recency else "(pattern only)" if all_pass else "(failed)"
+                report.append(f"BULLISH #{bullish_found}: {s1.timestamp.strftime('%Y-%m-%d')} -> {s2.timestamp.strftime('%Y-%m-%d')} {status}")
+                for c in checks:
+                    report.append(f"  {c}")
+                
+                if all_pass and candles_since <= max_recency:
+                    bullish_valid += 1
         
-        # Check for bearish divergences (show all, mark strong)
-        bear_divs = []
-        for i in range(len(swing_highs) - 1):
-            sw1 = swing_highs[i]
-            sw2 = swing_highs[i + 1]
-            
-            candles_apart = sw2.index - sw1.index
-            if not (MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE):
-                continue
-            
-            if sw2.price <= sw1.price:  # Not higher high
-                continue
-                
-            if sw2.rsi >= sw1.rsi:  # Not lower RSI
-                continue
-                
-            if sw2.rsi <= RSI_OVERBOUGHT:  # Not overbought
-                continue
-            
-            # Check pattern validity
-            pattern_valid, _ = scanner.check_pattern_validity(df, sw1, sw2, False)
-            if not pattern_valid:
-                continue
-            
-            candles_since = current_idx - sw2.index
-            is_recent = candles_since <= max_recency
-            is_strong = sw2.rsi > 70
-            
-            bear_divs.append({
-                'sw1': sw1,
-                'sw2': sw2,
-                'candles_apart': candles_apart,
-                'candles_since': candles_since,
-                'is_recent': is_recent,
-                'is_strong': is_strong
-            })
+        if bullish_found == 0:
+            report.append("")
+            report.append("No bullish divergence patterns found")
         
-        # Report bullish divergences
-        report.append("=" * 60)
-        report.append("BULLISH DIVERGENCES (Price LL + RSI HL)")
-        report.append("=" * 60)
-        
-        if bull_divs:
-            for d in bull_divs:
-                sw1, sw2 = d['sw1'], d['sw2']
-                status = []
-                if d['is_recent']:
-                    status.append("RECENT")
-                if d['is_strong']:
-                    status.append("⚡STRONG")
-                status_str = " | ".join(status) if status else "historical"
-                
-                alert_status = "✅ WOULD ALERT" if (d['is_recent'] and d['is_strong']) else "❌ filtered"
-                
-                report.append(f"\n[{status_str}] {alert_status}")
-                report.append(f"  Swing 1: {sw1.timestamp.strftime('%Y-%m-%d %H:%M')}")
-                report.append(f"    Price: ${sw1.price:.4f} | RSI: {sw1.rsi:.1f}")
-                report.append(f"  Swing 2: {sw2.timestamp.strftime('%Y-%m-%d %H:%M')}")
-                report.append(f"    Price: ${sw2.price:.4f} | RSI: {sw2.rsi:.1f}")
-                report.append(f"  Distance: {d['candles_apart']} candles")
-                report.append(f"  Age: {d['candles_since']} candles ago")
-        else:
-            report.append("\nNo bullish divergences found.")
-        
-        # Report bearish divergences
+        # BEARISH SCAN
         report.append("")
-        report.append("=" * 60)
-        report.append("BEARISH DIVERGENCES (Price HH + RSI LH)")
-        report.append("=" * 60)
+        report.append("=" * 55)
+        report.append("BEARISH DIVERGENCE SCAN")
+        report.append(f"(Price Higher High + RSI Lower High + RSI > {RSI_OVERBOUGHT})")
+        report.append("=" * 55)
         
-        if bear_divs:
-            for d in bear_divs:
-                sw1, sw2 = d['sw1'], d['sw2']
-                status = []
-                if d['is_recent']:
-                    status.append("RECENT")
-                if d['is_strong']:
-                    status.append("⚡STRONG")
-                status_str = " | ".join(status) if status else "historical"
+        bearish_found = 0
+        bearish_valid = 0
+        
+        for i in range(len(swing_highs) - 1):
+            s1 = swing_highs[i]
+            s2 = swing_highs[i + 1]
+            
+            if s2.price > s1.price and s2.rsi < s1.rsi:
+                bearish_found += 1
+                candles_apart = s2.index - s1.index
+                candles_since = current_idx - s2.index
                 
-                alert_status = "✅ WOULD ALERT" if (d['is_recent'] and d['is_strong']) else "❌ filtered"
+                checks = []
+                all_pass = True
                 
-                report.append(f"\n[{status_str}] {alert_status}")
-                report.append(f"  Swing 1: {sw1.timestamp.strftime('%Y-%m-%d %H:%M')}")
-                report.append(f"    Price: ${sw1.price:.4f} | RSI: {sw1.rsi:.1f}")
-                report.append(f"  Swing 2: {sw2.timestamp.strftime('%Y-%m-%d %H:%M')}")
-                report.append(f"    Price: ${sw2.price:.4f} | RSI: {sw2.rsi:.1f}")
-                report.append(f"  Distance: {d['candles_apart']} candles")
-                report.append(f"  Age: {d['candles_since']} candles ago")
-        else:
-            report.append("\nNo bearish divergences found.")
+                if MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE:
+                    checks.append(f"[OK] Distance: {candles_apart} candles")
+                else:
+                    checks.append(f"[FAIL] Distance: {candles_apart} (need {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE})")
+                    all_pass = False
+                
+                checks.append(f"[OK] Price: ${s1.price:.2f} -> ${s2.price:.2f} (HIGHER HIGH)")
+                checks.append(f"[OK] RSI: {s1.rsi:.1f} -> {s2.rsi:.1f} (LOWER HIGH)")
+                
+                if s2.rsi > RSI_OVERBOUGHT:
+                    checks.append(f"[OK] RSI Zone: {s2.rsi:.1f} > {RSI_OVERBOUGHT} (OVERBOUGHT)")
+                else:
+                    checks.append(f"[FAIL] RSI Zone: {s2.rsi:.1f} <= {RSI_OVERBOUGHT} (NOT overbought)")
+                    all_pass = False
+                
+                valid, msg = scanner.check_pattern_validity(df, s1, s2, False)
+                if valid:
+                    checks.append(f"[OK] Pattern: {msg}")
+                else:
+                    checks.append(f"[FAIL] Pattern: {msg}")
+                    all_pass = False
+                
+                if candles_since <= max_recency:
+                    checks.append(f"[OK] Recency: {candles_since}/{max_recency} candles (RECENT)")
+                else:
+                    checks.append(f"[--] Recency: {candles_since}/{max_recency} candles (historical)")
+                
+                report.append("")
+                status = ">>> VALID SIGNAL <<<" if all_pass and candles_since <= max_recency else "(pattern only)" if all_pass else "(failed)"
+                report.append(f"BEARISH #{bearish_found}: {s1.timestamp.strftime('%Y-%m-%d')} -> {s2.timestamp.strftime('%Y-%m-%d')} {status}")
+                for c in checks:
+                    report.append(f"  {c}")
+                
+                if all_pass and candles_since <= max_recency:
+                    bearish_valid += 1
+        
+        if bearish_found == 0:
+            report.append("")
+            report.append("No bearish divergence patterns found")
         
         # Summary
         report.append("")
-        report.append("=" * 60)
+        report.append("=" * 55)
         report.append("SUMMARY")
-        report.append("=" * 60)
-        strong_recent_bull = sum(1 for d in bull_divs if d['is_recent'] and d['is_strong'])
-        strong_recent_bear = sum(1 for d in bear_divs if d['is_recent'] and d['is_strong'])
-        report.append(f"Total Bullish: {len(bull_divs)} | STRONG & Recent: {strong_recent_bull}")
-        report.append(f"Total Bearish: {len(bear_divs)} | STRONG & Recent: {strong_recent_bear}")
-        report.append(f"Alertable NOW: {strong_recent_bull + strong_recent_bear}")
-        
-        # Recent swing points for reference
+        report.append("=" * 55)
+        report.append(f"Bullish Patterns: {bullish_found} found, {bullish_valid} valid signals")
+        report.append(f"Bearish Patterns: {bearish_found} found, {bearish_valid} valid signals")
         report.append("")
-        report.append("[RECENT SWING LOWS]")
-        report.append("-" * 55)
-        for sl in swing_lows[-15:]:
-            strong_mark = "⚡" if sl.rsi < 30 else "  "
-            report.append(f"{strong_mark} {sl.timestamp.strftime('%Y-%m-%d %H:%M')} | ${sl.price:.4f} | RSI: {sl.rsi:.1f}")
+        report.append(f"Timeframe: {timeframe.upper()}")
+        report.append(f"Swing Strength: {strength} candles each side")
+        report.append(f"Alert fires: {strength} candle(s) after Swing 2 forms")
+        
+        if timeframe == "1w":
+            report.append(f"For weekly: Alert fires 1 WEEK after swing forms")
+        elif timeframe == "1M":
+            report.append(f"For monthly: Alert fires 1 MONTH after swing forms")
+        elif timeframe == "1d":
+            report.append(f"For daily: Alert fires 2 DAYS after swing forms")
+        elif timeframe == "4h":
+            report.append(f"For 4h: Alert fires 8 HOURS after swing forms")
+        
+        # List all swing points for reference
+        report.append("")
+        report.append("=" * 55)
+        report.append("ALL SWING POINTS (Last 20)")
+        report.append("=" * 55)
         
         report.append("")
-        report.append("[RECENT SWING HIGHS]")
+        report.append("[SWING LOWS]")
         report.append("-" * 55)
-        for sh in swing_highs[-15:]:
-            strong_mark = "⚡" if sh.rsi > 70 else "  "
-            report.append(f"{strong_mark} {sh.timestamp.strftime('%Y-%m-%d %H:%M')} | ${sh.price:.4f} | RSI: {sh.rsi:.1f}")
+        for sl in swing_lows[-20:]:
+            report.append(f"  {sl.timestamp.strftime('%Y-%m-%d %H:%M')} | ${sl.price:.4f} | RSI: {sl.rsi:.1f}")
+        
+        report.append("")
+        report.append("[SWING HIGHS]")
+        report.append("-" * 55)
+        for sh in swing_highs[-20:]:
+            report.append(f"  {sh.timestamp.strftime('%Y-%m-%d %H:%M')} | ${sh.price:.4f} | RSI: {sh.rsi:.1f}")
         
         # Send report in chunks
         chunks = []
@@ -456,10 +447,9 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbols = scanner.get_symbols_to_scan()
     await update.message.reply_text(
-        f"*Scanning {len(symbols)} coins for STRONG signals...*\n"
+        f"*Scanning {len(symbols)} coins...*\n"
         f"Timeframes: {', '.join(SCAN_TIMEFRAMES)}\n"
         f"Swing Strength: 4h/1d=2, 1w/1M=1\n"
-        f"⚡ STRONG only: RSI < 30 (bull), > 70 (bear)\n"
         f"This may take a few minutes...",
         parse_mode='Markdown'
     )
@@ -469,7 +459,7 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if alerts:
             await update.message.reply_text(
-                f"✅ *Found {len(alerts)} STRONG signals!*",
+                f"✅ *Found {len(alerts)} signals!*",
                 parse_mode='Markdown'
             )
             
@@ -487,15 +477,13 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if len(alerts) > 10:
                 await update.message.reply_text(
-                    f"_...and {len(alerts) - 10} more STRONG signals_",
+                    f"_...and {len(alerts) - 10} more signals_",
                     parse_mode='Markdown'
                 )
         else:
             await update.message.reply_text(
-                f"*No STRONG divergences found right now*\n\n"
-                f"STRONG signals require:\n"
-                f"• Bullish: RSI < 30\n"
-                f"• Bearish: RSI > 70\n\n"
+                f"*No divergences found right now*\n\n"
+                f"This is normal - divergences are rare.\n"
                 f"The bot will alert you when one forms.\n\n"
                 f"Time: {format_sl_time()}",
                 parse_mode='Markdown'
@@ -509,17 +497,17 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
     if not subscribers:
         return
     
-    logger.info(f"[{format_sl_time()}] Scheduled scan for {len(subscribers)} subscribers (STRONG only)")
+    logger.info(f"[{format_sl_time()}] Scheduled scan for {len(subscribers)} subscribers")
     
     try:
         alerts = scanner.scan_all()
         
         if not alerts:
-            logger.info(f"[{format_sl_time()}] No STRONG signals found")
+            logger.info(f"[{format_sl_time()}] No signals found")
             return
         
         for alert in alerts:
-            logger.info(f"[{format_sl_time()}] STRONG Signal: {alert.symbol} {alert.timeframe}")
+            logger.info(f"[{format_sl_time()}] Signal: {alert.symbol} {alert.timeframe}")
         
         for chat_id in subscribers.keys():
             for alert in alerts[:5]:
@@ -537,7 +525,7 @@ async def scheduled_scan(context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Send error: {e}")
         
-        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} STRONG alerts")
+        logger.info(f"[{format_sl_time()}] Sent {len(alerts)} alerts")
     
     except Exception as e:
         logger.error(f"[{format_sl_time()}] Scan error: {e}")
@@ -609,7 +597,7 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Quick debug info"""
     symbols = scanner.get_symbols_to_scan()
     
-    msg = f"""*Debug Info - STRONG SIGNALS ONLY*
+    msg = f"""*Debug Info*
 
 Exchange: {EXCHANGE.upper()}
 Coins loaded: {len(symbols)}
@@ -619,24 +607,18 @@ Cooldowns active: {len(scanner.alert_cooldowns)}
 *Swing Strength:*
 • 4h: {SWING_STRENGTH_MAP.get('4h', 2)} candles
 • 1d: {SWING_STRENGTH_MAP.get('1d', 2)} candles
-• 1w: {SWING_STRENGTH_MAP.get('1w', 1)} candle
-• 1M: {SWING_STRENGTH_MAP.get('1M', 1)} candle
+• 1w: {SWING_STRENGTH_MAP.get('1w', 1)} candles
+• 1M: {SWING_STRENGTH_MAP.get('1M', 1)} candles
 
-*Recency Windows (all = 1 candle):*
-• 4h: {MAX_CANDLES_SINCE_SWING2_MAP.get('4h', 1)} candle (4 hours)
-• 1d: {MAX_CANDLES_SINCE_SWING2_MAP.get('1d', 1)} candle (1 day)
-• 1w: {MAX_CANDLES_SINCE_SWING2_MAP.get('1w', 1)} candle (1 week)
-• 1M: {MAX_CANDLES_SINCE_SWING2_MAP.get('1M', 1)} candle (1 month)
-
-*Swing Distance:* {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles
+*Recency Windows:*
+• 4h: {MAX_CANDLES_SINCE_SWING2_MAP.get('4h', 4)} candles
+• 1d: {MAX_CANDLES_SINCE_SWING2_MAP.get('1d', 3)} candles
+• 1w: {MAX_CANDLES_SINCE_SWING2_MAP.get('1w', 3)} candles
+• 1M: {MAX_CANDLES_SINCE_SWING2_MAP.get('1M', 2)} candles
 
 *RSI Zones:*
 Bullish: < {RSI_OVERSOLD}
 Bearish: > {RSI_OVERBOUGHT}
-
-*⚡ STRONG Filter:*
-Bullish: RSI < 30
-Bearish: RSI > 70
 
 Time: {format_sl_time()}"""
     
@@ -664,11 +646,9 @@ def main():
     
     app.job_queue.run_repeating(scheduled_scan, interval=SCAN_INTERVAL, first=60)
     
-    logger.info(f"[{format_sl_time()}] Bot starting - STRONG SIGNALS ONLY...")
+    logger.info(f"[{format_sl_time()}] Bot starting...")
     logger.info(f"[{format_sl_time()}] Timeframes: {SCAN_TIMEFRAMES}")
     logger.info(f"[{format_sl_time()}] Swing Strength: 4h/1d=2, 1w/1M=1")
-    logger.info(f"[{format_sl_time()}] Alert Timing: 1 candle after swing (all TFs)")
-    logger.info(f"[{format_sl_time()}] STRONG filter: RSI < 30 (bull), > 70 (bear)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
