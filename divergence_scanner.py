@@ -1,20 +1,26 @@
 """
-RSI Divergence Bot - SIMPLIFIED VERSION (FIXED FOR ALL TIMEFRAMES)
-==================================================================
-Fixed issues:
-1. 1h/4h now work - relaxed recency per timeframe
-2. RSI zones slightly relaxed for more signals
-3. Swing strength optimized per timeframe
+RSI Divergence Bot - UPDATED VERSION (1 CANDLE CONFIRMATION)
+==============================================================
+Changes from previous version:
+1. 4h and 1d now use swing strength = 1 (was 2)
+2. Alert timing: 1 candle after swing for ALL timeframes
+3. Added verification logic to debug signal detection
+
+Alert Timing (1 candle after swing):
+- 4h: Alert ~4 hours after swing point
+- 1d: Alert ~1 day after swing point  
+- 1w: Alert ~1 week after swing point
+- 1M: Alert ~1 month after swing point
 
 CONDITIONS FOR VALID SIGNAL:
-1. Valid swing points detected (strength varies by TF)
+1. Valid swing points detected (strength=1 for all TFs)
 2. Divergence pattern exists:
    - BULLISH: Price Lower Low + RSI Higher Low
    - BEARISH: Price Higher High + RSI Lower High
-3. Swing 2 RSI in extreme zone (relaxed)
+3. Swing 2 RSI in extreme zone
 4. Swings are 3-50 candles apart
 5. Pattern not invalidated between swings
-6. Swing 2 is recent (varies by timeframe)
+6. Swing 2 is recent (within recency window)
 """
 
 import ccxt
@@ -37,41 +43,42 @@ from config import (
 SL_TZ = pytz.timezone(TIMEZONE)
 
 # =============================================================================
-# FIXED CONDITIONS - NOW WORKS FOR ALL TIMEFRAMES
+# UPDATED: SWING STRENGTH = 1 FOR ALL TIMEFRAMES (1 candle confirmation)
 # =============================================================================
 
-# Swing Detection - Strength per Timeframe
+# Swing Detection - Now 1 candle for all (faster signals)
 SWING_STRENGTH_MAP = {
-    "4h": 2,   # 2 candles each side - more confirmation needed
-    "1d": 2,   # 2 candles each side - more confirmation needed  
-    "1w": 1,   # 1 candle each side - weekly is strong, alert after 1 week
-    "1M": 1,   # 1 candle each side - monthly is strong, alert after 1 month
+    "4h": 1,   # 1 candle each side - alert after 4 hours
+    "1d": 1,   # 1 candle each side - alert after 1 day
+    "1w": 1,   # 1 candle each side - alert after 1 week
+    "1M": 1,   # 1 candle each side - alert after 1 month
 }
-SWING_STRENGTH = 2  # Default fallback
+SWING_STRENGTH = 1  # Default fallback
 
 # Divergence Requirements
 MIN_SWING_DISTANCE = 3   # Minimum candles between swings
 MAX_SWING_DISTANCE = 50  # Maximum candles between swings
 
-# RSI Extreme Zones (KEY FILTER - Original values)
+# RSI Extreme Zones (KEY FILTER)
 RSI_OVERSOLD = 40    # Bullish: RSI must be below this
 RSI_OVERBOUGHT = 60  # Bearish: RSI must be above this
 
-# FIXED: Recency per timeframe
+# UPDATED: Recency per timeframe (adjusted for strength=1)
+# With strength=1, swing is detected at index+1, so we have more window
 MAX_CANDLES_SINCE_SWING2_MAP = {
-    "4h": 4,   # 16 hours window (strength=2, detected at +2)
-    "1d": 3,   # 3 days window (strength=2, detected at +2)
-    "1w": 3,   # 3 weeks window (strength=1, detected at +1)
+    "4h": 3,   # 12 hours window (strength=1, detected at +1)
+    "1d": 2,   # 2 days window (strength=1, detected at +1)
+    "1w": 2,   # 2 weeks window (strength=1, detected at +1)
     "1M": 2,   # 2 months window (strength=1, detected at +1)
 }
-MAX_CANDLES_SINCE_SWING2 = 4  # Default fallback
+MAX_CANDLES_SINCE_SWING2 = 3  # Default fallback
 
 # Max age in seconds - prevents stale/late signals
 MAX_SIGNAL_AGE = {
-    "4h": 20 * 60 * 60,          # 20 hours
-    "1d": 3 * 24 * 60 * 60,      # 3 days
-    "1w": 28 * 24 * 60 * 60,     # 4 weeks (was 2 weeks)
-    "1M": 90 * 24 * 60 * 60,     # 3 months (was 2 months)
+    "4h": 16 * 60 * 60,          # 16 hours (4 candles)
+    "1d": 2 * 24 * 60 * 60,      # 2 days
+    "1w": 21 * 24 * 60 * 60,     # 3 weeks
+    "1M": 60 * 24 * 60 * 60,     # 2 months
 }
 
 # =============================================================================
@@ -395,10 +402,10 @@ def get_tradingview_link(symbol: str, timeframe: str) -> str:
 
 
 class DivergenceScanner:
-    """Simplified Divergence Scanner - FIXED FOR ALL TIMEFRAMES"""
+    """Simplified Divergence Scanner - UPDATED WITH 1 CANDLE CONFIRMATION"""
     
     def __init__(self):
-        print(f"[{format_sl_time()}] Initializing FIXED Scanner...")
+        print(f"[{format_sl_time()}] Initializing UPDATED Scanner (1 candle confirmation)...")
         print(f"[{format_sl_time()}] CONDITIONS:")
         print(f"  - Swing Strength: {SWING_STRENGTH_MAP}")
         print(f"  - Swing Distance: {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles")
@@ -639,8 +646,171 @@ class DivergenceScanner:
         cutoff = time.time() - 86400
         self.sent_divergences = {k: v for k, v in self.sent_divergences.items() if v > cutoff}
     
+    def verify_divergence_detection(self, symbol: str, df: pd.DataFrame, timeframe: str = "4h") -> Dict:
+        """
+        VERIFICATION FUNCTION: Debug divergence detection step by step
+        Returns detailed info about what's found and why signals pass/fail
+        """
+        result = {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "total_candles": len(df),
+            "swing_strength": SWING_STRENGTH_MAP.get(timeframe, SWING_STRENGTH),
+            "max_recency": MAX_CANDLES_SINCE_SWING2_MAP.get(timeframe, MAX_CANDLES_SINCE_SWING2),
+            "swing_lows": [],
+            "swing_highs": [],
+            "potential_bullish": [],
+            "potential_bearish": [],
+            "valid_signals": [],
+            "rejected_reasons": []
+        }
+        
+        current_idx = len(df) - 1
+        max_recency = result["max_recency"]
+        
+        # Find swings
+        swing_lows = self.find_swing_lows(df, timeframe)
+        swing_highs = self.find_swing_highs(df, timeframe)
+        
+        result["swing_lows"] = [{"idx": s.index, "price": s.price, "rsi": s.rsi, 
+                                  "ts": s.timestamp.strftime('%Y-%m-%d %H:%M'),
+                                  "candles_from_now": current_idx - s.index} for s in swing_lows[-10:]]
+        result["swing_highs"] = [{"idx": s.index, "price": s.price, "rsi": s.rsi,
+                                   "ts": s.timestamp.strftime('%Y-%m-%d %H:%M'),
+                                   "candles_from_now": current_idx - s.index} for s in swing_highs[-10:]]
+        
+        # Check bullish divergences
+        for i in range(len(swing_lows) - 1):
+            swing1 = swing_lows[i]
+            swing2 = swing_lows[i + 1]
+            
+            checks = {
+                "swing1_idx": swing1.index,
+                "swing2_idx": swing2.index,
+                "swing1_price": swing1.price,
+                "swing2_price": swing2.price,
+                "swing1_rsi": swing1.rsi,
+                "swing2_rsi": swing2.rsi,
+                "candles_apart": swing2.index - swing1.index,
+                "candles_since_swing2": current_idx - swing2.index,
+                "checks": {}
+            }
+            
+            # Check 1: Distance
+            candles_apart = swing2.index - swing1.index
+            dist_ok = MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE
+            checks["checks"]["distance"] = {"value": candles_apart, "required": f"{MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE}", "pass": dist_ok}
+            
+            # Check 2: Price Lower Low
+            price_ok = swing2.price < swing1.price
+            checks["checks"]["price_ll"] = {"swing1": swing1.price, "swing2": swing2.price, "pass": price_ok}
+            
+            # Check 3: RSI Higher Low
+            rsi_ok = swing2.rsi > swing1.rsi
+            checks["checks"]["rsi_hl"] = {"swing1": swing1.rsi, "swing2": swing2.rsi, "pass": rsi_ok}
+            
+            # Check 4: RSI in oversold zone
+            zone_ok = swing2.rsi < RSI_OVERSOLD
+            checks["checks"]["rsi_zone"] = {"value": swing2.rsi, "required": f"< {RSI_OVERSOLD}", "pass": zone_ok}
+            
+            # Check 5: Recency
+            candles_since = current_idx - swing2.index
+            recency_ok = candles_since <= max_recency
+            checks["checks"]["recency"] = {"value": candles_since, "required": f"<= {max_recency}", "pass": recency_ok}
+            
+            # Check 6: Pattern validity
+            pattern_ok, pattern_msg = self.check_pattern_validity(df, swing1, swing2, True)
+            checks["checks"]["pattern"] = {"message": pattern_msg, "pass": pattern_ok}
+            
+            all_pass = dist_ok and price_ok and rsi_ok and zone_ok and recency_ok and pattern_ok
+            checks["all_pass"] = all_pass
+            
+            if price_ok and rsi_ok:  # Basic divergence exists
+                result["potential_bullish"].append(checks)
+                
+                if all_pass:
+                    result["valid_signals"].append({
+                        "type": "BULLISH",
+                        "swing1": {"idx": swing1.index, "price": swing1.price, "rsi": swing1.rsi},
+                        "swing2": {"idx": swing2.index, "price": swing2.price, "rsi": swing2.rsi},
+                        "candles_since": candles_since
+                    })
+                else:
+                    failed = [k for k, v in checks["checks"].items() if not v["pass"]]
+                    result["rejected_reasons"].append({
+                        "type": "BULLISH",
+                        "swing2_idx": swing2.index,
+                        "failed_checks": failed
+                    })
+        
+        # Check bearish divergences
+        for i in range(len(swing_highs) - 1):
+            swing1 = swing_highs[i]
+            swing2 = swing_highs[i + 1]
+            
+            checks = {
+                "swing1_idx": swing1.index,
+                "swing2_idx": swing2.index,
+                "swing1_price": swing1.price,
+                "swing2_price": swing2.price,
+                "swing1_rsi": swing1.rsi,
+                "swing2_rsi": swing2.rsi,
+                "candles_apart": swing2.index - swing1.index,
+                "candles_since_swing2": current_idx - swing2.index,
+                "checks": {}
+            }
+            
+            # Check 1: Distance
+            candles_apart = swing2.index - swing1.index
+            dist_ok = MIN_SWING_DISTANCE <= candles_apart <= MAX_SWING_DISTANCE
+            checks["checks"]["distance"] = {"value": candles_apart, "required": f"{MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE}", "pass": dist_ok}
+            
+            # Check 2: Price Higher High
+            price_ok = swing2.price > swing1.price
+            checks["checks"]["price_hh"] = {"swing1": swing1.price, "swing2": swing2.price, "pass": price_ok}
+            
+            # Check 3: RSI Lower High
+            rsi_ok = swing2.rsi < swing1.rsi
+            checks["checks"]["rsi_lh"] = {"swing1": swing1.rsi, "swing2": swing2.rsi, "pass": rsi_ok}
+            
+            # Check 4: RSI in overbought zone
+            zone_ok = swing2.rsi > RSI_OVERBOUGHT
+            checks["checks"]["rsi_zone"] = {"value": swing2.rsi, "required": f"> {RSI_OVERBOUGHT}", "pass": zone_ok}
+            
+            # Check 5: Recency
+            candles_since = current_idx - swing2.index
+            recency_ok = candles_since <= max_recency
+            checks["checks"]["recency"] = {"value": candles_since, "required": f"<= {max_recency}", "pass": recency_ok}
+            
+            # Check 6: Pattern validity
+            pattern_ok, pattern_msg = self.check_pattern_validity(df, swing1, swing2, False)
+            checks["checks"]["pattern"] = {"message": pattern_msg, "pass": pattern_ok}
+            
+            all_pass = dist_ok and price_ok and rsi_ok and zone_ok and recency_ok and pattern_ok
+            checks["all_pass"] = all_pass
+            
+            if price_ok and rsi_ok:  # Basic divergence exists
+                result["potential_bearish"].append(checks)
+                
+                if all_pass:
+                    result["valid_signals"].append({
+                        "type": "BEARISH",
+                        "swing1": {"idx": swing1.index, "price": swing1.price, "rsi": swing1.rsi},
+                        "swing2": {"idx": swing2.index, "price": swing2.price, "rsi": swing2.rsi},
+                        "candles_since": candles_since
+                    })
+                else:
+                    failed = [k for k, v in checks["checks"].items() if not v["pass"]]
+                    result["rejected_reasons"].append({
+                        "type": "BEARISH",
+                        "swing2_idx": swing2.index,
+                        "failed_checks": failed
+                    })
+        
+        return result
+    
     def detect_divergences(self, symbol: str, df: pd.DataFrame, timeframe: str = "4h") -> List[AlertSignal]:
-        """Main divergence detection - FIXED FOR ALL TIMEFRAMES"""
+        """Main divergence detection - UPDATED WITH 1 CANDLE CONFIRMATION"""
         signals = []
         current_idx = len(df) - 1
         
@@ -673,7 +843,7 @@ class DivergenceScanner:
                 continue
             why_valid.append(f"RSI: {swing1.rsi:.1f} → {swing2.rsi:.1f} (HL)")
             
-            # Condition 4: RSI in OVERSOLD zone (RELAXED)
+            # Condition 4: RSI in OVERSOLD zone
             if swing2.rsi >= RSI_OVERSOLD:
                 continue
             why_valid.append(f"RSI Zone: {swing2.rsi:.1f} < {RSI_OVERSOLD}")
@@ -684,7 +854,7 @@ class DivergenceScanner:
                 continue
             why_valid.append(f"Pattern: Valid")
             
-            # Condition 6: Recency - FIXED per timeframe
+            # Condition 6: Recency - per timeframe
             candles_since = current_idx - swing2.index
             if candles_since > max_recency:
                 continue
@@ -755,7 +925,7 @@ class DivergenceScanner:
                 continue
             why_valid.append(f"RSI: {swing1.rsi:.1f} → {swing2.rsi:.1f} (LH)")
             
-            # Condition 4: RSI in OVERBOUGHT zone (RELAXED)
+            # Condition 4: RSI in OVERBOUGHT zone
             if swing2.rsi <= RSI_OVERBOUGHT:
                 continue
             why_valid.append(f"RSI Zone: {swing2.rsi:.1f} > {RSI_OVERBOUGHT}")
@@ -766,7 +936,7 @@ class DivergenceScanner:
                 continue
             why_valid.append(f"Pattern: Valid")
             
-            # Condition 6: Recency - FIXED per timeframe
+            # Condition 6: Recency
             candles_since = current_idx - swing2.index
             if candles_since > max_recency:
                 continue
@@ -1025,6 +1195,56 @@ TP2: {fmt(tp2)} (+5%)
 
 ⚠️ DYOR - Not financial advice
 🕐 {format_sl_time()}"""
+        
+        return msg
+    
+    @staticmethod
+    def format_regime_info(symbol: str, timeframe: str, regime: MarketRegime, 
+                           volatility: VolatilityStatus, current_price: float, 
+                           current_rsi: float) -> str:
+        """Format market regime info"""
+        def fmt(p):
+            if p >= 1000:
+                return f"${p:,.2f}"
+            elif p >= 1:
+                return f"${p:.4f}"
+            else:
+                return f"${p:.6f}"
+        
+        msg = f"""*📊 Market Regime: {symbol} {timeframe.upper()}*
+
+*Current:*
+Price: {fmt(current_price)}
+RSI: {current_rsi:.1f}
+
+━━━━━━━━━━━━━━━━━━━━━━
+*📈 TREND ANALYSIS*
+━━━━━━━━━━━━━━━━━━━━━━
+{regime.regime_emoji} *{regime.regime_description}*
+ADX: {regime.adx_value:.1f}
+Divergence Rating: *{regime.divergence_rating}*
+
+━━━━━━━━━━━━━━━━━━━━━━
+*📊 VOLATILITY*
+━━━━━━━━━━━━━━━━━━━━━━
+{volatility.volatility_emoji} *{volatility.volatility_type.upper()}*
+ATR Ratio: {volatility.atr_ratio:.2f}x average
+💡 {volatility.position_advice}
+
+━━━━━━━━━━━━━━━━━━━━━━
+*🎯 RECOMMENDATION*
+━━━━━━━━━━━━━━━━━━━━━━"""
+        
+        if regime.divergence_rating == "IDEAL":
+            msg += "\n✅ *IDEAL* conditions for divergence trading"
+        elif regime.divergence_rating == "GOOD":
+            msg += "\n🟡 *GOOD* conditions - proceed with caution"
+        elif regime.divergence_rating == "CAUTION":
+            msg += "\n⚠️ *CAUTION* - trending market, divergences risky"
+        else:
+            msg += "\n🔴 *RISKY* - strong trend, consider SMC/trend following"
+        
+        msg += f"\n\n🕐 {format_sl_time()}"
         
         return msg
     

@@ -56,7 +56,7 @@ h1{{color:#58a6ff}}p{{color:#8b949e}}.ok{{color:#3fb950}}</style></head>
 <p>Time: {format_sl_time()}</p>
 <hr>
 <h3>Conditions:</h3>
-<p>Swing Strength: 4h/1d=2, 1w/1M=1</p>
+<p>Swing Strength: All TFs=1 candle (1 candle confirmation)</p>
 <p>Swing Distance: {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles</p>
 <p>Bullish RSI: &lt; {RSI_OVERSOLD}</p>
 <p>Bearish RSI: &gt; {RSI_OVERBOUGHT}</p>
@@ -84,15 +84,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🦎 Exchange: *{EXCHANGE.upper()}*
 
 *Signal Conditions:*
-• Swing Strength: 4h/1d=2, 1w/1M=1
+• Swing Strength: All TFs=1 candle
 • Swing Distance: {MIN_SWING_DISTANCE}-{MAX_SWING_DISTANCE} candles
 • Bullish RSI: < {RSI_OVERSOLD} (oversold)
 • Bearish RSI: > {RSI_OVERBOUGHT} (overbought)
 • Price-based invalidation only
 
 *Alert Timing:*
-• 4h: 2 candles after swing (8 hours)
-• 1d: 2 candles after swing (2 days)
+• 4h: 1 candle after swing (4 hours)
+• 1d: 1 candle after swing (1 day)
 • 1w: 1 candle after swing (1 week)
 • 1M: 1 candle after swing (1 month)
 
@@ -114,8 +114,8 @@ async def conditions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"""*📋 Signal Conditions*
 
 *Swing Strength per Timeframe:*
-• 4h: 2 candles each side (alert after 8 hours)
-• 1d: 2 candles each side (alert after 2 days)
+• 4h: 1 candle each side (alert after 4 hours)
+• 1d: 1 candle each side (alert after 1 day)
 • 1w: 1 candle each side (alert after 1 week)
 • 1M: 1 candle each side (alert after 1 month)
 
@@ -192,7 +192,7 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Default: 200 candles (max: 1000)\n"
             "Timeframes: 4h, 1d, 1w, 1M\n\n"
             "*Swing Strength:*\n"
-            "• 4h, 1d: 2 candles each side\n"
+            "• 4h, 1d: 1 candle each side\n"
             "• 1w, 1M: 1 candle each side",
             parse_mode='Markdown'
         )
@@ -401,9 +401,9 @@ async def verify(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif timeframe == "1M":
             report.append(f"For monthly: Alert fires 1 MONTH after swing forms")
         elif timeframe == "1d":
-            report.append(f"For daily: Alert fires 2 DAYS after swing forms")
+            report.append(f"For daily: Alert fires 1 DAY after swing forms")
         elif timeframe == "4h":
-            report.append(f"For 4h: Alert fires 8 HOURS after swing forms")
+            report.append(f"For 4h: Alert fires 4 HOURS after swing forms")
         
         # List all swing points for reference
         report.append("")
@@ -449,7 +449,7 @@ async def manual_scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"*Scanning {len(symbols)} coins...*\n"
         f"Timeframes: {', '.join(SCAN_TIMEFRAMES)}\n"
-        f"Swing Strength: 4h/1d=2, 1w/1M=1\n"
+        f"Swing Strength: All TFs=1 candle\n"
         f"This may take a few minutes...",
         parse_mode='Markdown'
     )
@@ -648,7 +648,7 @@ def main():
     
     logger.info(f"[{format_sl_time()}] Bot starting...")
     logger.info(f"[{format_sl_time()}] Timeframes: {SCAN_TIMEFRAMES}")
-    logger.info(f"[{format_sl_time()}] Swing Strength: 4h/1d=2, 1w/1M=1")
+    logger.info(f"[{format_sl_time()}] Swing Strength: All TFs=1 candle")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
